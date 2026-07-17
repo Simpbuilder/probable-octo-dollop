@@ -1,0 +1,25 @@
+{
+  "sources": {
+    "reddit": {
+      "enabled": true,
+      "subreddits": [
+        "funny",
+        "Unexpected",
+        "ContagiousLaughter"
+      ],
+      "minimum_score": 500,
+      "maximum_clip_length_seconds": 90,
+      "maximum_post_age_days": 14,
+      "sorting_mode": "hot",
+      "posts_to_inspect": 100
+    },
+    "youtube_shorts": {
+      "enabled": false,
+      "minimum_score": 0,
+      "maximum_clip_length_seconds": 90,
+      "maximum_post_age_days": 14,
+      "sorting_mode": "recent",
+      "posts_to_inspect": 50
+    }
+  }
+}

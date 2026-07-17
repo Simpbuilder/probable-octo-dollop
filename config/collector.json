@@ -1,0 +1,11 @@
+{
+  "output_folders": {
+    "pending": "clips/pending",
+    "approved": "clips/approved",
+    "rejected": "clips/rejected",
+    "ready": "clips/ready",
+    "posted": "clips/posted",
+    "metadata": "metadata"
+  },
+  "metadata_file": "metadata/clips.json"
+}
