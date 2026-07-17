@@ -1,0 +1,44 @@
+# Environment
+.env
+
+# Python cache
+__pycache__/
+**/__pycache__/
+**pycache**/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Logs
+*.log
+logs/*
+!logs/.gitkeep
+
+# Downloaded and generated video files
+*.mp4
+*.mov
+*.m4v
+*.avi
+*.mkv
+*.webm
+*.mpg
+*.mpeg
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+tmp/
+temp/
+.DS_Store
+Thumbs.db
+
+# Keep placeholder files tracked
+!.gitkeep
+!**/.gitkeep
