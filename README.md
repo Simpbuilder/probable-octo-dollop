@@ -1,36 +1,78 @@
 # Viral Clip Pipeline
 
-This repository is a standalone Python foundation for an automated pipeline
-that will discover funny video clips, prepare them for Instagram Reels, and
-eventually help queue or post them. It is separate from the `ai-video-poster`
-project.
+This repository is a standalone Python pipeline for finding funny video clips,
+preparing them for Instagram Reels, and eventually helping queue or post them.
+It remains separate from the `ai-video-poster` project.
 
-## Planned Pipeline
+## Current Collector
 
-1. Collect candidate clips from configured sources, starting with Reddit.
-2. Store source metadata and downloaded clips for review.
-3. Move approved clips through formatting, captions, branding, and final checks.
-4. Prepare Reel-ready assets for queueing or posting.
+The first working source is Reddit. It uses PRAW and Reddit's official API to
+inspect configured subreddits, filter suitable Reddit-hosted video posts, and
+save their metadata in `metadata/clips.json`. It does not download video files.
 
-## Collector Architecture
+The collector is deliberately split into focused modules:
 
-The collector is source-agnostic. `config/sources.json` holds each source's
-collection rules, while `config/collector.json` defines the local output
-folders and metadata file. `collector.config` loads and validates these files.
+- `collector.reddit_client` loads credentials and communicates with PRAW.
+- `collector.reddit_filter` applies post eligibility rules.
+- `collector.reddit_metadata` creates `ClipMetadata` records.
+- `collector.storage` persists JSON metadata and prevents duplicates.
+- `collector.collector` coordinates a run and returns a summary.
 
-`collector.models` defines typed configuration and clip metadata records.
-`collector.storage` stores those records in a schema-versioned JSON file and
-provides duplicate checks using both the pipeline ID and source post ID. This
-keeps the first implementation simple while leaving a clear path to a database
-later.
+## Installation
 
-`run_pipeline.py` demonstrates the architecture using temporary local storage:
-it loads configuration, saves and reloads an example metadata record, then
-confirms duplicate detection.
+Install the required packages in your Python virtual environment:
 
-## Current Status
+```bash
+pip install -r requirements.txt
+```
 
-The local collector architecture, JSON configuration, metadata storage, and
-tests are in place. Reddit fetching, credentials, networking, downloading,
-video processing, captions, hooks, AI analysis, and Instagram posting have not
-been added yet.
+Create a local credentials file from the safe template:
+
+```bash
+copy .env.example .env
+```
+
+On macOS or Linux, use `cp .env.example .env` instead. Edit `.env` with the
+three credentials for a Reddit application:
+
+```text
+REDDIT_CLIENT_ID=
+REDDIT_CLIENT_SECRET=
+REDDIT_USER_AGENT=
+```
+
+Register a Reddit application to obtain the client ID and client secret. The
+user agent should uniquely identify this project, for example
+`script:viral-clip-pipeline:0.1 (by u/your_reddit_username)`. The `.env` file
+is ignored by Git; never commit real credentials.
+
+## Configuration
+
+Edit `config/sources.json` to configure the Reddit collector:
+
+- `subreddits`: subreddit names to inspect.
+- `minimum_score`: minimum Reddit score to accept.
+- `maximum_clip_length_seconds`: reject videos with a known longer duration.
+- `maximum_post_age_days`: reject older posts.
+- `sorting_mode`: `hot`, `new`, or `top`.
+- `top_time_filter`: for `top`, choose `day`, `week`, `month`, `year`, or `all`.
+- `posts_to_inspect`: maximum submissions inspected per subreddit.
+- `allow_nsfw`: set to `true` only when NSFW posts should be considered.
+
+`config/collector.json` controls local workflow folders and the JSON metadata
+file location.
+
+## Run
+
+```bash
+python run_pipeline.py
+```
+
+Each run prints a summary of checked subreddits, inspected posts, accepted
+metadata, duplicates, filtered posts, and recoverable errors. A missing or
+invalid subreddit does not stop other configured subreddits from being checked.
+
+## Not Yet Implemented
+
+Videos are not downloaded or processed yet. There is no FFmpeg integration,
+formatting, captions, hooks, AI analysis, queueing, or Instagram posting.

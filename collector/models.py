@@ -23,7 +23,9 @@ class SourceConfig:
     maximum_clip_length_seconds: int = 90
     maximum_post_age_days: int = 14
     sorting_mode: str = "hot"
+    top_time_filter: str = "week"
     posts_to_inspect: int = 100
+    allow_nsfw: bool = False
 
     def __post_init__(self) -> None:
         """Validate source settings that are independent of a source client."""
@@ -37,6 +39,8 @@ class SourceConfig:
             raise ValueError("maximum_post_age_days must be greater than zero.")
         if not self.sorting_mode.strip():
             raise ValueError("sorting_mode must not be empty.")
+        if not self.top_time_filter.strip():
+            raise ValueError("top_time_filter must not be empty.")
         if self.posts_to_inspect <= 0:
             raise ValueError("posts_to_inspect must be greater than zero.")
         if any(not subreddit.strip() for subreddit in self.subreddits):
@@ -113,6 +117,10 @@ class ClipMetadata:
             raise ValueError("height must be greater than zero when provided.")
         if self.created_at.tzinfo is None or self.added_at.tzinfo is None:
             raise ValueError("created_at and added_at must include timezone information.")
+        if self.download_status not in {"pending", "downloaded", "failed"}:
+            raise ValueError("download_status is not supported.")
+        if self.processing_status not in {"pending", "approved", "rejected", "ready", "posted"}:
+            raise ValueError("processing_status is not supported.")
 
     def to_dict(self) -> dict[str, object]:
         """Serialize the record to JSON-compatible primitives."""

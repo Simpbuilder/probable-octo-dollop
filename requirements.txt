@@ -1,1 +1,2 @@
-# Dependencies will be added later.
+praw
+python-dotenv

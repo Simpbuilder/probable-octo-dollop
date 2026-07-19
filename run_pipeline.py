@@ -1,48 +1,54 @@
-"""Demonstrate the local collector architecture without contacting any source."""
+"""Run the configured Reddit metadata collector from the project root."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import logging
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from collector import (
-    ClipMetadata,
-    clip_exists,
-    load_clip_metadata,
+    CollectionSummary,
+    ConfigurationError,
+    RedditCredentialsError,
+    RedditMetadataCollector,
+    create_reddit_client,
     load_collector_config,
-    save_clip_metadata,
+    load_reddit_credentials,
 )
+from collector.reddit_client import RedditClientError
 
 
-def main() -> None:
-    """Load config, round-trip example metadata, and verify duplicate detection."""
+def configure_logging() -> None:
+    """Configure concise console logging for recoverable collector failures."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+
+def print_summary(summary: CollectionSummary) -> None:
+    """Print the stable terminal summary without exposing implementation details."""
+    print(f"Subreddits checked: {summary.subreddits_checked}")
+    print(f"Posts inspected: {summary.posts_inspected}")
+    print(f"Accepted: {summary.accepted}")
+    print(f"Duplicates: {summary.duplicates}")
+    print(f"Rejected by filters: {summary.rejected_by_filters}")
+    print(f"Errors: {summary.errors}")
+
+
+def main() -> int:
+    """Load configuration and credentials, then collect Reddit video metadata."""
+    configure_logging()
     project_root = Path(__file__).resolve().parent
-    config = load_collector_config(project_root / "config")
 
-    example_clip = ClipMetadata(
-        unique_id="reddit-demo-post-001",
-        source="reddit",
-        subreddit="funny",
-        source_post_id="demo-post-001",
-        source_url="https://www.reddit.com/r/funny/comments/demo-post-001",
-        title="Example collector metadata record",
-        author="example_creator",
-        score=1250,
-        comment_count=84,
-        created_at=datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc),
-        media_url="https://example.invalid/video.mp4",
-        local_file_path=config.output_path("pending") / "reddit-demo-post-001.mp4",
-    )
+    try:
+        config = load_collector_config(project_root / "config")
+        credentials = load_reddit_credentials(project_root / ".env")
+        reddit_client = create_reddit_client(credentials)
+    except (ConfigurationError, RedditCredentialsError, RedditClientError) as error:
+        print(f"Collector not started: {error}")
+        return 2
 
-    with TemporaryDirectory(prefix="viral-clip-pipeline-") as temporary_directory:
-        metadata_file = Path(temporary_directory) / config.metadata_file.name
-        save_clip_metadata(metadata_file, example_clip)
-        loaded_clip = load_clip_metadata(metadata_file, example_clip.unique_id)
-
-        print(f"Loaded metadata: {loaded_clip.to_dict() if loaded_clip else None}")
-        print(f"Duplicate detected: {clip_exists(metadata_file, example_clip)}")
+    summary = RedditMetadataCollector(config, reddit_client).collect()
+    print_summary(summary)
+    return 1 if summary.authentication_failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

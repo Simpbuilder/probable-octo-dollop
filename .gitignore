@@ -19,6 +19,10 @@ ENV/
 logs/*
 !logs/.gitkeep
 
+# Generated metadata
+metadata/*.json
+!metadata/.gitkeep
+
 # Downloaded and generated video files
 *.mp4
 *.mov

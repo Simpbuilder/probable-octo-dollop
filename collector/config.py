@@ -10,6 +10,8 @@ from .models import CollectorConfig, SourceConfig
 
 
 REQUIRED_OUTPUT_FOLDERS = frozenset({"pending", "approved", "rejected", "ready", "posted", "metadata"})
+REDDIT_SORTING_MODES = frozenset({"hot", "new", "top"})
+REDDIT_TOP_TIME_FILTERS = frozenset({"day", "week", "month", "year", "all"})
 
 
 class ConfigurationError(ValueError):
@@ -79,7 +81,11 @@ def _parse_source_configs(data: Mapping[str, Any]) -> dict[str, SourceConfig]:
                     raw_config, "maximum_post_age_days", f"source '{name}'"
                 ),
                 sorting_mode=_required_string(raw_config, "sorting_mode", f"source '{name}'"),
+                top_time_filter=_optional_string(
+                    raw_config, "top_time_filter", f"source '{name}'", default="week"
+                ),
                 posts_to_inspect=_required_int(raw_config, "posts_to_inspect", f"source '{name}'"),
+                allow_nsfw=_optional_bool(raw_config, "allow_nsfw", f"source '{name}'", default=False),
             )
         except ValueError as error:
             raise ConfigurationError(f"Invalid settings for source '{name}': {error}") from error
@@ -112,6 +118,12 @@ def _validate_collector_config(config: CollectorConfig) -> None:
     reddit_config = config.source_configs.get("reddit")
     if reddit_config and reddit_config.enabled and not reddit_config.subreddits:
         raise ConfigurationError("An enabled Reddit source requires at least one subreddit.")
+    if reddit_config and reddit_config.sorting_mode not in REDDIT_SORTING_MODES:
+        allowed_modes = ", ".join(sorted(REDDIT_SORTING_MODES))
+        raise ConfigurationError(f"Reddit sorting_mode must be one of: {allowed_modes}.")
+    if reddit_config and reddit_config.top_time_filter not in REDDIT_TOP_TIME_FILTERS:
+        allowed_filters = ", ".join(sorted(REDDIT_TOP_TIME_FILTERS))
+        raise ConfigurationError(f"Reddit top_time_filter must be one of: {allowed_filters}.")
     if config.metadata_file.parent != config.output_path("metadata"):
         raise ConfigurationError("metadata_file must be located inside the metadata output folder.")
 
@@ -143,6 +155,26 @@ def _required_int(data: Mapping[str, Any], field_name: str, context: str) -> int
     value = data.get(field_name)
     if isinstance(value, bool) or not isinstance(value, int):
         raise ConfigurationError(f"{context} field '{field_name}' must be an integer.")
+    return value
+
+
+def _optional_string(
+    data: Mapping[str, Any], field_name: str, context: str, *, default: str
+) -> str:
+    """Read an optional non-empty string field from a JSON object."""
+    value = data.get(field_name, default)
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigurationError(f"{context} field '{field_name}' must be a non-empty string.")
+    return value
+
+
+def _optional_bool(
+    data: Mapping[str, Any], field_name: str, context: str, *, default: bool
+) -> bool:
+    """Read an optional boolean field from a JSON object."""
+    value = data.get(field_name, default)
+    if not isinstance(value, bool):
+        raise ConfigurationError(f"{context} field '{field_name}' must be a boolean.")
     return value
 
 

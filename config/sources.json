@@ -11,7 +11,9 @@
       "maximum_clip_length_seconds": 90,
       "maximum_post_age_days": 14,
       "sorting_mode": "hot",
-      "posts_to_inspect": 100
+      "top_time_filter": "week",
+      "posts_to_inspect": 100,
+      "allow_nsfw": false
     },
     "youtube_shorts": {
       "enabled": false,
@@ -19,7 +21,9 @@
       "maximum_clip_length_seconds": 90,
       "maximum_post_age_days": 14,
       "sorting_mode": "recent",
-      "posts_to_inspect": 50
+      "top_time_filter": "week",
+      "posts_to_inspect": 50,
+      "allow_nsfw": false
     }
   }
 }
