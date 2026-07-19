@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from .models import CollectorConfig, DownloaderConfig, PipelineMode, SourceConfig
+from .models import CollectorConfig, DownloaderConfig, FormatterConfig, PipelineMode, SourceConfig
 
 
 REQUIRED_OUTPUT_FOLDERS = frozenset({"pending", "approved", "rejected", "ready", "posted", "metadata"})
@@ -39,6 +39,9 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
         collector_data, "pipeline_mode", "collector.json", default="reddit_api"
     )
     downloader_config = _parse_downloader_config(collector_data, project_root)
+    formatter_config = _parse_formatter_config(
+        _load_optional_json_object(config_directory / "formatter.json"), project_root
+    )
 
     config = CollectorConfig(
         source_configs=source_configs,
@@ -46,6 +49,7 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
         metadata_file=metadata_file,
         pipeline_mode=pipeline_mode,  # type: ignore[arg-type]
         downloader_config=downloader_config,
+        formatter_config=formatter_config,
     )
     _validate_collector_config(config)
     return config
@@ -63,6 +67,13 @@ def _load_json_object(path: Path) -> Mapping[str, Any]:
     if not isinstance(data, dict):
         raise ConfigurationError(f"Configuration file must contain a JSON object: {path}")
     return data
+
+
+def _load_optional_json_object(path: Path) -> Mapping[str, Any] | None:
+    """Load an optional JSON object so older project configurations remain valid."""
+    if not path.exists():
+        return None
+    return _load_json_object(path)
 
 
 def _parse_source_configs(data: Mapping[str, Any]) -> dict[str, SourceConfig]:
@@ -155,6 +166,43 @@ def _parse_downloader_config(data: Mapping[str, Any], project_root: Path) -> Dow
         raise ConfigurationError(f"Invalid downloader settings: {error}") from error
 
 
+def _parse_formatter_config(
+    data: Mapping[str, Any] | None,
+    project_root: Path,
+) -> FormatterConfig | None:
+    """Load optional vertical formatter settings from ``config/formatter.json``."""
+    if data is None:
+        return None
+
+    try:
+        return FormatterConfig(
+            output_directory=_resolve_path(
+                _required_string(data, "output_directory", "formatter.json"), project_root
+            ),
+            enabled=_required_bool(data, "enabled", "formatter.json"),
+            output_width=_required_int(data, "output_width", "formatter.json"),
+            output_height=_required_int(data, "output_height", "formatter.json"),
+            background_color=_required_string(data, "background_color", "formatter.json"),
+            horizontal_margin=_required_int(data, "horizontal_margin", "formatter.json"),
+            top_text_area_height=_required_int(data, "top_text_area_height", "formatter.json"),
+            bottom_margin=_required_int(data, "bottom_margin", "formatter.json"),
+            maximum_video_width=_required_int(data, "maximum_video_width", "formatter.json"),
+            maximum_video_height=_required_int(data, "maximum_video_height", "formatter.json"),
+            crop_mode=_required_string(data, "crop_mode", "formatter.json"),  # type: ignore[arg-type]
+            output_frame_rate=_required_int(data, "output_frame_rate", "formatter.json"),
+            video_codec=_required_string(data, "video_codec", "formatter.json"),
+            audio_codec=_required_string(data, "audio_codec", "formatter.json"),
+            crf=_required_int(data, "crf", "formatter.json"),
+            encoding_preset=_required_string(data, "encoding_preset", "formatter.json"),
+            overwrite=_required_bool(data, "overwrite", "formatter.json"),
+            maximum_clips_per_run=_required_int(
+                data, "maximum_clips_per_run", "formatter.json"
+            ),
+        )
+    except ValueError as error:
+        raise ConfigurationError(f"Invalid formatter settings: {error}") from error
+
+
 def _validate_collector_config(config: CollectorConfig) -> None:
     """Apply cross-file validation after both configuration files are loaded."""
     if not config.enabled_sources:
@@ -178,6 +226,11 @@ def _validate_collector_config(config: CollectorConfig) -> None:
         and config.downloader_config.directory != config.output_path("pending")
     ):
         raise ConfigurationError("downloader.directory must match the pending output folder.")
+    if (
+        config.formatter_config is not None
+        and config.formatter_config.output_directory != config.output_path("ready")
+    ):
+        raise ConfigurationError("formatter.output_directory must match the ready output folder.")
 
 
 def _resolve_path(raw_path: str, project_root: Path) -> Path:

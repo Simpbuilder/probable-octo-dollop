@@ -28,6 +28,9 @@ class CollectorConfigTests(unittest.TestCase):
         self.assertIsNotNone(config.downloader_config)
         self.assertEqual(config.downloader_config.directory, PROJECT_ROOT / "clips" / "pending")
         self.assertFalse(config.downloader_config.enabled)
+        self.assertIsNotNone(config.formatter_config)
+        self.assertEqual(config.formatter_config.output_directory, PROJECT_ROOT / "clips" / "ready")
+        self.assertFalse(config.formatter_config.enabled)
 
     def test_rejects_enabled_reddit_without_subreddits(self) -> None:
         """Validation catches a missing Reddit target list before a run starts."""

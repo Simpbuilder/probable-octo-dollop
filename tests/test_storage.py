@@ -51,14 +51,20 @@ class MetadataStorageTests(unittest.TestCase):
             self.assertIsNotNone(loaded_clip)
             self.assertEqual(loaded_clip.to_dict(), clip.to_dict())
 
-    def test_loads_metadata_written_before_download_error_was_added(self) -> None:
-        """Older metadata remains readable after the downloader state extension."""
+    def test_loads_metadata_written_before_optional_pipeline_fields_were_added(self) -> None:
+        """Older metadata remains readable after downloader and formatter extensions."""
         clip_data = make_clip().to_dict()
         clip_data.pop("download_error")
+        clip_data.pop("formatted_file_path")
+        clip_data.pop("formatted_width")
+        clip_data.pop("formatted_height")
+        clip_data.pop("format_error")
 
         loaded_clip = ClipMetadata.from_dict(clip_data)
 
         self.assertIsNone(loaded_clip.download_error)
+        self.assertIsNone(loaded_clip.formatted_file_path)
+        self.assertIsNone(loaded_clip.format_error)
 
     def test_detects_duplicate_source_post(self) -> None:
         """A changed pipeline ID cannot duplicate a source post already stored."""

@@ -9,9 +9,15 @@ import unittest
 from unittest.mock import patch
 
 from collector.manual_url_collector import ManualUrlCollector, normalize_manual_url
-from collector.models import CollectorConfig, DownloaderConfig
+from collector.models import CollectorConfig, DownloaderConfig, FormatterConfig
 from collector.storage import load_all_clip_metadata
-from run_pipeline import parse_arguments, selected_collectors, should_run_downloader
+from run_pipeline import (
+    parse_arguments,
+    selected_collectors,
+    should_run_collectors,
+    should_run_downloader,
+    should_run_formatter,
+)
 
 
 NOW = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
@@ -139,12 +145,41 @@ class PipelineModeTests(unittest.TestCase):
             output_folders={},
             metadata_file=Path("metadata/clips.json"),
             downloader_config=DownloaderConfig(directory=Path("clips/pending"), enabled=True),
+            formatter_config=FormatterConfig(output_directory=Path("clips/ready")),
         )
 
         self.assertFalse(should_run_downloader(disabled_config, explicit_download=False))
         self.assertTrue(should_run_downloader(disabled_config, explicit_download=True))
         self.assertTrue(should_run_downloader(enabled_config, explicit_download=False))
         self.assertTrue(parse_arguments(["--download"]).download)
+
+    def test_formatter_flags_keep_format_only_runs_separate_from_collection_and_downloads(self) -> None:
+        """A format-only run does not implicitly collect or download new media."""
+        disabled_config = CollectorConfig(
+            source_configs={},
+            output_folders={},
+            metadata_file=Path("metadata/clips.json"),
+            downloader_config=DownloaderConfig(directory=Path("clips/pending"), enabled=True),
+            formatter_config=FormatterConfig(output_directory=Path("clips/ready"), enabled=False),
+        )
+        enabled_config = CollectorConfig(
+            source_configs={},
+            output_folders={},
+            metadata_file=Path("metadata/clips.json"),
+            formatter_config=FormatterConfig(output_directory=Path("clips/ready"), enabled=True),
+        )
+
+        self.assertTrue(parse_arguments(["--format"]).format)
+        self.assertTrue(parse_arguments(["--format-one"]).format_one)
+        self.assertTrue(parse_arguments(["--download", "--format"]).download)
+        self.assertTrue(parse_arguments(["--download", "--format"]).format)
+        self.assertFalse(should_run_collectors(explicit_download=False, explicit_format=True))
+        self.assertTrue(should_run_collectors(explicit_download=True, explicit_format=True))
+        self.assertFalse(
+            should_run_downloader(disabled_config, explicit_download=False, format_only=True)
+        )
+        self.assertTrue(should_run_formatter(disabled_config, explicit_format=True))
+        self.assertTrue(should_run_formatter(enabled_config, explicit_format=False))
 
 
 def create_expected_id(original_url: str) -> str:

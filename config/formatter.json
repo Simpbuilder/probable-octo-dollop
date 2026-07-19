@@ -1,0 +1,20 @@
+{
+  "enabled": false,
+  "output_directory": "clips/ready",
+  "output_width": 1080,
+  "output_height": 1920,
+  "background_color": "white",
+  "horizontal_margin": 60,
+  "top_text_area_height": 320,
+  "bottom_margin": 120,
+  "maximum_video_width": 960,
+  "maximum_video_height": 1400,
+  "crop_mode": "fit",
+  "output_frame_rate": 30,
+  "video_codec": "libx264",
+  "audio_codec": "aac",
+  "crf": 20,
+  "encoding_preset": "medium",
+  "overwrite": false,
+  "maximum_clips_per_run": 5
+}

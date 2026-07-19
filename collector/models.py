@@ -11,6 +11,7 @@ from typing import Literal, Mapping
 DownloadStatus = Literal["pending", "downloaded", "failed"]
 ProcessingStatus = Literal["pending", "approved", "rejected", "ready", "posted"]
 PipelineMode = Literal["reddit_api", "manual_urls", "both"]
+CropMode = Literal["fit"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +58,7 @@ class CollectorConfig:
     metadata_file: Path
     pipeline_mode: PipelineMode = "reddit_api"
     downloader_config: "DownloaderConfig | None" = None
+    formatter_config: "FormatterConfig | None" = None
 
     @property
     def enabled_sources(self) -> tuple[str, ...]:
@@ -96,6 +98,10 @@ class ClipMetadata:
     processing_status: ProcessingStatus = "pending"
     added_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     download_error: str | None = None
+    formatted_file_path: Path | None = None
+    formatted_width: int | None = None
+    formatted_height: int | None = None
+    format_error: str | None = None
 
     def __post_init__(self) -> None:
         """Validate stable metadata before it is written to storage."""
@@ -126,6 +132,12 @@ class ClipMetadata:
             raise ValueError("processing_status is not supported.")
         if self.download_error is not None and not self.download_error.strip():
             raise ValueError("download_error must be a non-empty string or null.")
+        if self.formatted_width is not None and self.formatted_width <= 0:
+            raise ValueError("formatted_width must be greater than zero when provided.")
+        if self.formatted_height is not None and self.formatted_height <= 0:
+            raise ValueError("formatted_height must be greater than zero when provided.")
+        if self.format_error is not None and not self.format_error.strip():
+            raise ValueError("format_error must be a non-empty string or null.")
 
     def to_dict(self) -> dict[str, object]:
         """Serialize the record to JSON-compatible primitives."""
@@ -149,6 +161,12 @@ class ClipMetadata:
             "processing_status": self.processing_status,
             "added_at": self.added_at.isoformat(),
             "download_error": self.download_error,
+            "formatted_file_path": (
+                str(self.formatted_file_path) if self.formatted_file_path else None
+            ),
+            "formatted_width": self.formatted_width,
+            "formatted_height": self.formatted_height,
+            "format_error": self.format_error,
         }
 
     @classmethod
@@ -174,6 +192,10 @@ class ClipMetadata:
             processing_status=_required_string(data, "processing_status"),  # type: ignore[arg-type]
             download_error=_optional_string(data, "download_error"),
             added_at=_required_datetime(data, "added_at"),
+            formatted_file_path=_optional_path(data, "formatted_file_path"),
+            formatted_width=_optional_int(data, "formatted_width"),
+            formatted_height=_optional_int(data, "formatted_height"),
+            format_error=_optional_string(data, "format_error"),
         )
 
 
@@ -205,6 +227,59 @@ class DownloaderConfig:
             raise ValueError("timeout_seconds must be greater than zero.")
         if self.downloads_per_run <= 0:
             raise ValueError("downloads_per_run must be greater than zero.")
+
+
+@dataclass(frozen=True, slots=True)
+class FormatterConfig:
+    """Validated layout and encoding settings for vertical-ready clip output."""
+
+    output_directory: Path
+    enabled: bool = False
+    output_width: int = 1080
+    output_height: int = 1920
+    background_color: str = "white"
+    horizontal_margin: int = 60
+    top_text_area_height: int = 320
+    bottom_margin: int = 120
+    maximum_video_width: int = 960
+    maximum_video_height: int = 1400
+    crop_mode: CropMode = "fit"
+    output_frame_rate: int = 30
+    video_codec: str = "libx264"
+    audio_codec: str = "aac"
+    crf: int = 20
+    encoding_preset: str = "medium"
+    overwrite: bool = False
+    maximum_clips_per_run: int = 5
+
+    def __post_init__(self) -> None:
+        """Validate values before FFmpeg can create media files."""
+        if self.output_width <= 0 or self.output_height <= 0:
+            raise ValueError("output dimensions must be greater than zero.")
+        if self.output_width % 2 or self.output_height % 2:
+            raise ValueError("output dimensions must be even for yuv420p output.")
+        if self.horizontal_margin < 0 or self.top_text_area_height < 0 or self.bottom_margin < 0:
+            raise ValueError("margins and top_text_area_height must be zero or greater.")
+        if self.maximum_video_width <= 0 or self.maximum_video_height <= 0:
+            raise ValueError("maximum video dimensions must be greater than zero.")
+        if self.output_width - (2 * self.horizontal_margin) <= 0:
+            raise ValueError("horizontal_margin leaves no space for video.")
+        if self.output_height - self.top_text_area_height - self.bottom_margin <= 0:
+            raise ValueError("text area and bottom margin leave no space for video.")
+        if self.crop_mode != "fit":
+            raise ValueError("crop_mode must be 'fit'.")
+        if self.output_frame_rate <= 0:
+            raise ValueError("output_frame_rate must be greater than zero.")
+        if not self.background_color.strip():
+            raise ValueError("background_color must not be empty.")
+        if not self.video_codec.strip() or not self.audio_codec.strip():
+            raise ValueError("video_codec and audio_codec must not be empty.")
+        if not 0 <= self.crf <= 51:
+            raise ValueError("crf must be between 0 and 51.")
+        if not self.encoding_preset.strip():
+            raise ValueError("encoding_preset must not be empty.")
+        if self.maximum_clips_per_run <= 0:
+            raise ValueError("maximum_clips_per_run must be greater than zero.")
 
 
 def _required_string(data: Mapping[str, object], field_name: str) -> str:

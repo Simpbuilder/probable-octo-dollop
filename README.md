@@ -19,14 +19,17 @@ This installs PRAW, `python-dotenv`, and `yt-dlp`.
 
 yt-dlp can download a video and audio stream separately. FFmpeg is required to
 merge those streams into a normal playable file. Install the FFmpeg binary and
-make sure `ffmpeg` is available on your `PATH`; verify it with:
+make sure both `ffmpeg` and `ffprobe` are available on your `PATH`; verify them
+with:
 
 ```bash
 ffmpeg -version
+ffprobe -version
 ```
 
 The downloader checks for FFmpeg only when yt-dlp selects separate streams. A
-single-file media format can still download without it. See the
+single-file media format can still download without it. The vertical formatter
+requires both tools to inspect and render local video files. See the
 [yt-dlp FFmpeg guidance](https://github.com/yt-dlp/yt-dlp#strongly-recommended)
 for installation details.
 
@@ -96,6 +99,41 @@ The `downloader` block in `config/collector.json` controls:
 - `downloads_per_run`: maximum pending records attempted in one run.
 - `enabled`: automatic download control; it is `false` by default.
 
+## Vertical Reel Formatter
+
+The formatter selects clips with `download_status: downloaded`,
+`processing_status: pending`, and an existing `local_file_path`. It keeps the
+original download in `clips/pending/` and creates a separate ready MP4 in
+`clips/ready/`. Metadata records the ready-file path and its 1080x1920 output
+dimensions while preserving source dimensions and the original local path.
+
+### Fit Layout
+
+The default `fit` crop mode never crops or stretches source content. Landscape,
+4:3, square, portrait, and already-vertical clips are scaled proportionally to
+fit inside a white 1080x1920 canvas. The source is centered in the usable area,
+with a configurable blank zone above it reserved for future hook text. No hook
+text, captions, logos, or watermarks are rendered at this stage.
+
+Formatted media uses H.264 video, AAC audio when source audio exists,
+`yuv420p`, a configured constant output frame rate, and MP4 fast-start metadata.
+Audio-free videos remain valid outputs. The formatter retries safely: a bad or
+missing source stays `pending` and receives a `format_error` in metadata.
+
+### Formatter Configuration
+
+`config/formatter.json` controls the local formatter and is disabled by
+default. It includes:
+
+- `output_directory`, `output_width`, `output_height`, and `background_color`.
+- `horizontal_margin`, `top_text_area_height`, `bottom_margin`, and maximum
+  video width and height.
+- `crop_mode`, which must remain `fit` for no-crop output.
+- `output_frame_rate`, `video_codec`, `audio_codec`, `crf`, and
+  `encoding_preset`.
+- `overwrite` and `maximum_clips_per_run` queue safeguards.
+- `enabled`, for intentionally enabling formatting in a normal pipeline run.
+
 ## Run
 
 Run the configured metadata collectors without downloading media:
@@ -115,6 +153,30 @@ intentionally want to retrieve into `input_urls.txt`, then run the command
 above. No real URL is committed to this repository, and the normal pipeline
 does not download a queued URL unless this flag is used or `downloader.enabled`
 is deliberately set to `true`.
+
+Format only clips that are already downloaded and awaiting processing. This
+does not run collectors or download new media:
+
+```bash
+python run_pipeline.py --format
+```
+
+Run the configured collectors, then download pending clips, then format ready
+vertical outputs in one explicit pass:
+
+```bash
+python run_pipeline.py --download --format
+```
+
+For a safe manual validation of one real local downloaded clip, run:
+
+```bash
+python run_pipeline.py --format-one
+```
+
+This formats at most one downloaded, pending clip and leaves its original file
+in `clips/pending/`. It requires local `ffmpeg` and `ffprobe`; no real clip is
+included in the repository.
 
 The downloader prints a summary such as:
 
@@ -148,6 +210,6 @@ maximum age, sorting mode, and NSFW handling.
 
 ## Not Yet Implemented
 
-There is no vertical formatting, FFmpeg-based layout rendering, captions,
-hooks, AI analysis, queueing, or Instagram posting. FFmpeg is used only by
-yt-dlp when it must merge downloaded audio and video streams.
+There are no captions, hook-text rendering, logos, watermarks, AI analysis,
+queueing, or Instagram posting. FFmpeg is used only for downloader stream
+merges and the local vertical formatting stage.
