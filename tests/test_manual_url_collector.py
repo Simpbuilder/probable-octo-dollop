@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -12,6 +14,7 @@ from collector.manual_url_collector import ManualUrlCollector, normalize_manual_
 from collector.models import CollectorConfig, DownloaderConfig, FormatterConfig
 from collector.storage import load_all_clip_metadata
 from run_pipeline import (
+    main,
     parse_arguments,
     selected_collectors,
     should_run_collectors,
@@ -171,6 +174,10 @@ class PipelineModeTests(unittest.TestCase):
 
         self.assertTrue(parse_arguments(["--format"]).format)
         self.assertTrue(parse_arguments(["--format-one"]).format_one)
+        self.assertEqual(
+            parse_arguments(["--format-one", "--hook", "Manual hook"]).hook,
+            "Manual hook",
+        )
         self.assertTrue(parse_arguments(["--download", "--format"]).download)
         self.assertTrue(parse_arguments(["--download", "--format"]).format)
         self.assertFalse(should_run_collectors(explicit_download=False, explicit_format=True))
@@ -180,6 +187,8 @@ class PipelineModeTests(unittest.TestCase):
         )
         self.assertTrue(should_run_formatter(disabled_config, explicit_format=True))
         self.assertTrue(should_run_formatter(enabled_config, explicit_format=False))
+        with redirect_stdout(StringIO()):
+            self.assertEqual(main(["--hook", "Manual hook"]), 2)
 
 
 def create_expected_id(original_url: str) -> str:

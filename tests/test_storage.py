@@ -59,12 +59,19 @@ class MetadataStorageTests(unittest.TestCase):
         clip_data.pop("formatted_width")
         clip_data.pop("formatted_height")
         clip_data.pop("format_error")
+        clip_data.pop("hook_text")
+        clip_data.pop("hook_status")
+        clip_data.pop("hook_source")
+        clip_data.pop("hook_error")
 
         loaded_clip = ClipMetadata.from_dict(clip_data)
 
         self.assertIsNone(loaded_clip.download_error)
         self.assertIsNone(loaded_clip.formatted_file_path)
         self.assertIsNone(loaded_clip.format_error)
+        self.assertIsNone(loaded_clip.hook_text)
+        self.assertIsNone(loaded_clip.hook_status)
+        self.assertIsNone(loaded_clip.hook_error)
 
     def test_detects_duplicate_source_post(self) -> None:
         """A changed pipeline ID cannot duplicate a source post already stored."""

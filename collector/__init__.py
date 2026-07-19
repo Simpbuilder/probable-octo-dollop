@@ -8,6 +8,7 @@ from .models import (
     CollectorConfig,
     DownloaderConfig,
     FormatterConfig,
+    HookConfig,
     PipelineMode,
     SourceConfig,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "DuplicateClipError",
     "DownloaderConfig",
     "FormatterConfig",
+    "HookConfig",
     "ManualUrlCollector",
     "ManualUrlSummary",
     "PipelineMode",

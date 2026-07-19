@@ -46,6 +46,7 @@ class FormatRequest:
     input_properties: InputMediaProperties
     layout: VideoLayout
     config: FormatterConfig
+    hook_overlay_file: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)

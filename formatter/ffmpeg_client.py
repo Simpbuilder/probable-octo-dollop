@@ -82,6 +82,10 @@ class FfmpegClient:
         self.ensure_available()
         if not request.input_file.is_file():
             raise FfmpegProcessError(f"Input video file does not exist: {request.input_file}")
+        if request.hook_overlay_file is not None and not request.hook_overlay_file.is_file():
+            raise FfmpegProcessError(
+                f"Hook overlay image does not exist: {request.hook_overlay_file}"
+            )
         request.output_file.parent.mkdir(parents=True, exist_ok=True)
 
         command = self.build_format_command(request)
@@ -111,20 +115,29 @@ class FfmpegClient:
         self.ensure_available()
         config = request.config
         layout = request.layout
-        filter_complex = ";".join(
+        filters = [
             (
-                (
-                    f"color=c={config.background_color}:s={layout.canvas_width}x"
-                    f"{layout.canvas_height}:r={config.output_frame_rate}[canvas]"
-                ),
-                (
-                    f"[0:v]scale={layout.video_width}:{layout.video_height}:flags=lanczos,"
-                    f"setsar=1,fps={config.output_frame_rate}[source]"
-                ),
-                f"[canvas][source]overlay=x={layout.x}:y={layout.y}:shortest=1:format=auto[video]",
+                f"color=c={config.background_color}:s={layout.canvas_width}x"
+                f"{layout.canvas_height}:r={config.output_frame_rate}[canvas]"
+            ),
+            (
+                f"[0:v]scale={layout.video_width}:{layout.video_height}:flags=lanczos,"
+                f"setsar=1,fps={config.output_frame_rate}[source]"
+            ),
+        ]
+        if request.hook_overlay_file is None:
+            filters.append(
+                f"[canvas][source]overlay=x={layout.x}:y={layout.y}:shortest=1:format=auto[video]"
             )
-        )
-        return [
+        else:
+            filters.extend(
+                (
+                    f"[canvas][source]overlay=x={layout.x}:y={layout.y}:shortest=1:format=auto[base]",
+                    "[1:v]format=rgba,setpts=PTS-STARTPTS[hook]",
+                    "[base][hook]overlay=x=0:y=0:shortest=1:format=auto[video]",
+                )
+            )
+        command = [
             self._ffmpeg_executable,
             "-hide_banner",
             "-loglevel",
@@ -133,29 +146,45 @@ class FfmpegClient:
             "-y" if config.overwrite else "-n",
             "-i",
             str(request.input_file),
-            "-filter_complex",
-            filter_complex,
-            "-map",
-            "[video]",
-            "-map",
-            "0:a?",
-            "-c:v",
-            config.video_codec,
-            "-preset",
-            config.encoding_preset,
-            "-crf",
-            str(config.crf),
-            "-pix_fmt",
-            "yuv420p",
-            "-r",
-            str(config.output_frame_rate),
-            "-c:a",
-            config.audio_codec,
-            "-movflags",
-            "+faststart",
-            "-shortest",
-            str(request.output_file),
         ]
+        if request.hook_overlay_file is not None:
+            command.extend(
+                (
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    str(config.output_frame_rate),
+                    "-i",
+                    str(request.hook_overlay_file),
+                )
+            )
+        command.extend(
+            (
+                "-filter_complex",
+                ";".join(filters),
+                "-map",
+                "[video]",
+                "-map",
+                "0:a?",
+                "-c:v",
+                config.video_codec,
+                "-preset",
+                config.encoding_preset,
+                "-crf",
+                str(config.crf),
+                "-pix_fmt",
+                "yuv420p",
+                "-r",
+                str(config.output_frame_rate),
+                "-c:a",
+                config.audio_codec,
+                "-movflags",
+                "+faststart",
+                "-shortest",
+                str(request.output_file),
+            )
+        )
+        return command
 
 
 def _parse_probe_output(output: str) -> InputMediaProperties:

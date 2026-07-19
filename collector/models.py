@@ -12,6 +12,9 @@ DownloadStatus = Literal["pending", "downloaded", "failed"]
 ProcessingStatus = Literal["pending", "approved", "rejected", "ready", "posted"]
 PipelineMode = Literal["reddit_api", "manual_urls", "both"]
 CropMode = Literal["fit"]
+HookStatus = Literal["rendered", "skipped", "failed"]
+HookSource = Literal["manual", "source_title"]
+HorizontalAlignment = Literal["left", "center", "right"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +105,10 @@ class ClipMetadata:
     formatted_width: int | None = None
     formatted_height: int | None = None
     format_error: str | None = None
+    hook_text: str | None = None
+    hook_status: HookStatus | None = None
+    hook_source: HookSource | None = None
+    hook_error: str | None = None
 
     def __post_init__(self) -> None:
         """Validate stable metadata before it is written to storage."""
@@ -138,6 +145,14 @@ class ClipMetadata:
             raise ValueError("formatted_height must be greater than zero when provided.")
         if self.format_error is not None and not self.format_error.strip():
             raise ValueError("format_error must be a non-empty string or null.")
+        if self.hook_text is not None and not self.hook_text.strip():
+            raise ValueError("hook_text must be a non-empty string or null.")
+        if self.hook_status is not None and self.hook_status not in {"rendered", "skipped", "failed"}:
+            raise ValueError("hook_status is not supported.")
+        if self.hook_source is not None and self.hook_source not in {"manual", "source_title"}:
+            raise ValueError("hook_source is not supported.")
+        if self.hook_error is not None and not self.hook_error.strip():
+            raise ValueError("hook_error must be a non-empty string or null.")
 
     def to_dict(self) -> dict[str, object]:
         """Serialize the record to JSON-compatible primitives."""
@@ -167,6 +182,10 @@ class ClipMetadata:
             "formatted_width": self.formatted_width,
             "formatted_height": self.formatted_height,
             "format_error": self.format_error,
+            "hook_text": self.hook_text,
+            "hook_status": self.hook_status,
+            "hook_source": self.hook_source,
+            "hook_error": self.hook_error,
         }
 
     @classmethod
@@ -196,6 +215,10 @@ class ClipMetadata:
             formatted_width=_optional_int(data, "formatted_width"),
             formatted_height=_optional_int(data, "formatted_height"),
             format_error=_optional_string(data, "format_error"),
+            hook_text=_optional_string(data, "hook_text"),
+            hook_status=_optional_string(data, "hook_status"),  # type: ignore[arg-type]
+            hook_source=_optional_string(data, "hook_source"),  # type: ignore[arg-type]
+            hook_error=_optional_string(data, "hook_error"),
         )
 
 
@@ -230,6 +253,66 @@ class DownloaderConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class HookConfig:
+    """Validated text-style settings for optional hook overlays."""
+
+    enabled: bool = False
+    font_path: Path | None = None
+    font_size: int = 72
+    font_color: str = "black"
+    maximum_text_width: int = 900
+    maximum_lines: int = 3
+    line_spacing: int = 10
+    horizontal_alignment: HorizontalAlignment = "center"
+    vertical_position: int = 36
+    text_box_height: int = 248
+    text_padding: int = 20
+    fallback_to_source_title: bool = True
+    minimum_font_size: int = 42
+    automatic_font_shrinking: bool = True
+    outline_color: str | None = None
+    outline_width: int = 0
+    shadow_color: str | None = None
+    shadow_offset: int = 0
+
+    def __post_init__(self) -> None:
+        """Validate text bounds before a hook overlay can be rendered."""
+        if self.font_size <= 0 or self.minimum_font_size <= 0:
+            raise ValueError("hook font sizes must be greater than zero.")
+        if self.minimum_font_size > self.font_size:
+            raise ValueError("hook minimum_font_size must not exceed font_size.")
+        if not self.font_color.strip():
+            raise ValueError("hook font_color must not be empty.")
+        if self.maximum_text_width <= 0:
+            raise ValueError("hook maximum_text_width must be greater than zero.")
+        if self.maximum_lines <= 0:
+            raise ValueError("hook maximum_lines must be greater than zero.")
+        if self.line_spacing < 0:
+            raise ValueError("hook line_spacing must be zero or greater.")
+        if self.horizontal_alignment not in {"left", "center", "right"}:
+            raise ValueError("hook horizontal_alignment is not supported.")
+        if self.vertical_position < 0 or self.text_padding < 0:
+            raise ValueError("hook vertical_position and text_padding must be zero or greater.")
+        if self.text_box_height <= 0:
+            raise ValueError("hook text_box_height must be greater than zero.")
+        if self.outline_width < 0 or self.shadow_offset < 0:
+            raise ValueError("hook outline_width and shadow_offset must be zero or greater.")
+        if self.outline_color is not None and not self.outline_color.strip():
+            raise ValueError("hook outline_color must be a non-empty string or null.")
+        if self.shadow_color is not None and not self.shadow_color.strip():
+            raise ValueError("hook shadow_color must be a non-empty string or null.")
+        if self.outline_width and self.outline_color is None:
+            raise ValueError("hook outline_color is required when outline_width is greater than zero.")
+        if self.shadow_offset and self.shadow_color is None:
+            raise ValueError("hook shadow_color is required when shadow_offset is greater than zero.")
+        shadow_space = self.shadow_offset if self.shadow_color is not None else 0
+        if self.maximum_text_width <= (2 * self.outline_width) + shadow_space:
+            raise ValueError("hook maximum_text_width leaves no room for text.")
+        if self.text_box_height <= (2 * self.text_padding) + (2 * self.outline_width) + shadow_space:
+            raise ValueError("hook text_box_height leaves no room for text.")
+
+
+@dataclass(frozen=True, slots=True)
 class FormatterConfig:
     """Validated layout and encoding settings for vertical-ready clip output."""
 
@@ -251,6 +334,7 @@ class FormatterConfig:
     encoding_preset: str = "medium"
     overwrite: bool = False
     maximum_clips_per_run: int = 5
+    hook: HookConfig = field(default_factory=HookConfig)
 
     def __post_init__(self) -> None:
         """Validate values before FFmpeg can create media files."""
@@ -280,6 +364,10 @@ class FormatterConfig:
             raise ValueError("encoding_preset must not be empty.")
         if self.maximum_clips_per_run <= 0:
             raise ValueError("maximum_clips_per_run must be greater than zero.")
+        if self.hook.maximum_text_width + (2 * self.hook.text_padding) > self.output_width:
+            raise ValueError("hook text width and padding exceed the output width.")
+        if self.hook.vertical_position + self.hook.text_box_height > self.top_text_area_height:
+            raise ValueError("hook text box must fit inside the top text area.")
 
 
 def _required_string(data: Mapping[str, object], field_name: str) -> str:

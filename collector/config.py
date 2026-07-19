@@ -6,7 +6,14 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from .models import CollectorConfig, DownloaderConfig, FormatterConfig, PipelineMode, SourceConfig
+from .models import (
+    CollectorConfig,
+    DownloaderConfig,
+    FormatterConfig,
+    HookConfig,
+    PipelineMode,
+    SourceConfig,
+)
 
 
 REQUIRED_OUTPUT_FOLDERS = frozenset({"pending", "approved", "rejected", "ready", "posted", "metadata"})
@@ -198,9 +205,57 @@ def _parse_formatter_config(
             maximum_clips_per_run=_required_int(
                 data, "maximum_clips_per_run", "formatter.json"
             ),
+            hook=_parse_hook_config(data, project_root),
         )
     except ValueError as error:
         raise ConfigurationError(f"Invalid formatter settings: {error}") from error
+
+
+def _parse_hook_config(data: Mapping[str, Any], project_root: Path) -> HookConfig:
+    """Load optional hook overlay settings while preserving older formatter files."""
+    raw_config = data.get("hook")
+    if raw_config is None:
+        return HookConfig()
+    if not isinstance(raw_config, dict):
+        raise ConfigurationError("formatter.json field 'hook' must be an object.")
+
+    try:
+        return HookConfig(
+            enabled=_required_bool(raw_config, "enabled", "formatter.json hook"),
+            font_path=_optional_path_or_none(raw_config, "font_path", "formatter.json hook", project_root),
+            font_size=_required_int(raw_config, "font_size", "formatter.json hook"),
+            font_color=_required_string(raw_config, "font_color", "formatter.json hook"),
+            maximum_text_width=_required_int(
+                raw_config, "maximum_text_width", "formatter.json hook"
+            ),
+            maximum_lines=_required_int(raw_config, "maximum_lines", "formatter.json hook"),
+            line_spacing=_required_int(raw_config, "line_spacing", "formatter.json hook"),
+            horizontal_alignment=_required_string(
+                raw_config, "horizontal_alignment", "formatter.json hook"
+            ),  # type: ignore[arg-type]
+            vertical_position=_required_int(raw_config, "vertical_position", "formatter.json hook"),
+            text_box_height=_required_int(raw_config, "text_box_height", "formatter.json hook"),
+            text_padding=_required_int(raw_config, "text_padding", "formatter.json hook"),
+            fallback_to_source_title=_required_bool(
+                raw_config, "fallback_to_source_title", "formatter.json hook"
+            ),
+            minimum_font_size=_required_int(
+                raw_config, "minimum_font_size", "formatter.json hook"
+            ),
+            automatic_font_shrinking=_required_bool(
+                raw_config, "automatic_font_shrinking", "formatter.json hook"
+            ),
+            outline_color=_optional_string_or_none(
+                raw_config, "outline_color", "formatter.json hook"
+            ),
+            outline_width=_required_int(raw_config, "outline_width", "formatter.json hook"),
+            shadow_color=_optional_string_or_none(
+                raw_config, "shadow_color", "formatter.json hook"
+            ),
+            shadow_offset=_required_int(raw_config, "shadow_offset", "formatter.json hook"),
+        )
+    except ValueError as error:
+        raise ConfigurationError(f"Invalid formatter hook settings: {error}") from error
 
 
 def _validate_collector_config(config: CollectorConfig) -> None:
@@ -271,6 +326,31 @@ def _optional_string(
     if not isinstance(value, str) or not value.strip():
         raise ConfigurationError(f"{context} field '{field_name}' must be a non-empty string.")
     return value
+
+
+def _optional_string_or_none(
+    data: Mapping[str, Any],
+    field_name: str,
+    context: str,
+) -> str | None:
+    """Read a nullable optional string field from a JSON object."""
+    value = data.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigurationError(f"{context} field '{field_name}' must be a non-empty string or null.")
+    return value
+
+
+def _optional_path_or_none(
+    data: Mapping[str, Any],
+    field_name: str,
+    context: str,
+    project_root: Path,
+) -> Path | None:
+    """Read a nullable local path and resolve relative values from the project root."""
+    value = _optional_string_or_none(data, field_name, context)
+    return _resolve_path(value, project_root) if value is not None else None
 
 
 def _optional_bool(

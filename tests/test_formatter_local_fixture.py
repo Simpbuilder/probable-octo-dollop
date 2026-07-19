@@ -8,8 +8,9 @@ import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 
-from collector.models import FormatterConfig
+from collector.models import FormatterConfig, HookConfig
 from formatter.ffmpeg_client import FfmpegClient
+from formatter.hooks import HookSelection, PillowHookRenderer
 from formatter.layout import calculate_fit_layout
 from formatter.models import FormatRequest
 
@@ -51,7 +52,17 @@ class LocalFfmpegFixtureTests(unittest.TestCase):
             )
             client = FfmpegClient()
             input_properties = client.inspect(source_file)
-            config = FormatterConfig(output_directory=output_file.parent)
+            config = FormatterConfig(
+                output_directory=output_file.parent,
+                hook=HookConfig(enabled=True),
+            )
+            hook_result = PillowHookRenderer().render(
+                HookSelection("A tiny synthetic hook", "manual"),
+                config.hook,
+                canvas_width=config.output_width,
+                canvas_height=config.output_height,
+                overlay_file=root / "hook.png",
+            )
             result = client.format(
                 FormatRequest(
                     input_file=source_file,
@@ -59,6 +70,7 @@ class LocalFfmpegFixtureTests(unittest.TestCase):
                     input_properties=input_properties,
                     layout=calculate_fit_layout(input_properties, config),
                     config=config,
+                    hook_overlay_file=hook_result.overlay_file,
                 )
             )
             output_properties = client.inspect(result.output_file)

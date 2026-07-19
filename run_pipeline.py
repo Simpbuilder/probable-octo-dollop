@@ -1,4 +1,4 @@
-"""Run configured collectors and optionally download pending clip media."""
+"""Run configured collectors, downloads, and optional vertical Reel formatting."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ from collector.reddit_client import RedditClientError
 
 
 def configure_logging() -> None:
-    """Configure concise console logging for recoverable collector failures."""
+    """Configure concise console logging for recoverable pipeline failures."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
@@ -61,7 +61,11 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
     parser.add_argument(
         "--format-one",
         action="store_true",
-        help="Format one already-downloaded pending clip for a local validation pass.",
+        help="Format one pending download, or validate one ready clip when used with --hook.",
+    )
+    parser.add_argument(
+        "--hook",
+        help="Use this manual hook text with --format-one without overwriting a prior ready render.",
     )
     return parser.parse_args(arguments)
 
@@ -192,6 +196,8 @@ def run_pending_clip_formatter(
     config: CollectorConfig,
     *,
     maximum_clips_override: int | None = None,
+    manual_hook: str | None = None,
+    include_ready_for_manual_hook: bool = False,
 ) -> int:
     """Run the FFmpeg formatter and report missing local tools without a traceback."""
     if config.formatter_config is None:
@@ -210,7 +216,10 @@ def run_pending_clip_formatter(
             metadata_file=config.metadata_file,
             config=formatter_config,
             ffmpeg_client=FfmpegClient(),
-        ).run()
+        ).run(
+            manual_hook=manual_hook,
+            include_ready_for_manual_hook=include_ready_for_manual_hook,
+        )
     except FfmpegDependencyError as error:
         print(f"Formatter not started: {error}")
         return 2
@@ -222,9 +231,15 @@ def run_pending_clip_formatter(
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
-    """Load configuration and run the manual, Reddit, or combined pipeline mode."""
+    """Load configuration and run the requested collection, download, and formatting stages."""
     configure_logging()
     parsed_arguments = parse_arguments(arguments)
+    if parsed_arguments.hook is not None and not parsed_arguments.format_one:
+        print("Pipeline not started: --hook requires --format-one.")
+        return 2
+    if parsed_arguments.hook is not None and not parsed_arguments.hook.strip():
+        print("Pipeline not started: --hook must not be blank.")
+        return 2
     project_root = Path(__file__).resolve().parent
     try:
         config = load_collector_config(project_root / "config")
@@ -252,6 +267,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
             run_pending_clip_formatter(
                 config,
                 maximum_clips_override=1 if parsed_arguments.format_one else None,
+                manual_hook=parsed_arguments.hook,
+                include_ready_for_manual_hook=(
+                    parsed_arguments.format_one and parsed_arguments.hook is not None
+                ),
             ),
         )
     return exit_code

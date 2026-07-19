@@ -16,5 +16,25 @@
   "crf": 20,
   "encoding_preset": "medium",
   "overwrite": false,
-  "maximum_clips_per_run": 5
+  "maximum_clips_per_run": 5,
+  "hook": {
+    "enabled": true,
+    "font_path": null,
+    "font_size": 72,
+    "font_color": "black",
+    "maximum_text_width": 900,
+    "maximum_lines": 3,
+    "line_spacing": 10,
+    "horizontal_alignment": "center",
+    "vertical_position": 36,
+    "text_box_height": 248,
+    "text_padding": 20,
+    "fallback_to_source_title": true,
+    "minimum_font_size": 42,
+    "automatic_font_shrinking": true,
+    "outline_color": null,
+    "outline_width": 0,
+    "shadow_color": null,
+    "shadow_offset": 0
+  }
 }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -89,6 +90,28 @@ class FfmpegClientTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertIsInstance(command, list)
         self.assertEqual(command[-1], str(input_file))
+
+    def test_builds_windows_safe_hook_overlay_command_without_inlining_user_text(self) -> None:
+        """A transparent hook image is a second input, not an escaped drawtext expression."""
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            request = replace(
+                make_request(root),
+                hook_overlay_file=root / "hook overlay.png",
+            )
+            client = FfmpegClient(ffmpeg_executable="ffmpeg.exe", ffprobe_executable="ffprobe.exe")
+
+            command = client.build_format_command(request)
+
+        self.assertIsInstance(command, list)
+        self.assertTrue(all(isinstance(argument, str) for argument in command))
+        self.assertIn("-loop", command)
+        self.assertIn("-framerate", command)
+        self.assertIn(str(request.hook_overlay_file), command)
+        filter_graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("[1:v]format=rgba,setpts=PTS-STARTPTS[hook]", filter_graph)
+        self.assertIn("[base][hook]overlay=x=0:y=0", filter_graph)
+        self.assertNotIn("drawtext", filter_graph)
 
     def test_missing_ffmpeg_or_ffprobe_is_reported_before_processing(self) -> None:
         """The adapter fails with a focused setup message when tools are unavailable."""

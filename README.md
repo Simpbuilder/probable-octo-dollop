@@ -13,7 +13,7 @@ dependencies:
 pip install -r requirements.txt
 ```
 
-This installs PRAW, `python-dotenv`, and `yt-dlp`.
+This installs PRAW, `python-dotenv`, `yt-dlp`, and Pillow for local hook-text overlays.
 
 ### FFmpeg
 
@@ -112,13 +112,45 @@ dimensions while preserving source dimensions and the original local path.
 The default `fit` crop mode never crops or stretches source content. Landscape,
 4:3, square, portrait, and already-vertical clips are scaled proportionally to
 fit inside a white 1080x1920 canvas. The source is centered in the usable area,
-with a configurable blank zone above it reserved for future hook text. No hook
-text, captions, logos, or watermarks are rendered at this stage.
+with a configurable area above it for hook text.
 
 Formatted media uses H.264 video, AAC audio when source audio exists,
 `yuv420p`, a configured constant output frame rate, and MP4 fast-start metadata.
 Audio-free videos remain valid outputs. The formatter retries safely: a bad or
 missing source stays `pending` and receives a `format_error` in metadata.
+
+### Hook Text
+
+The `hook` block in `config/formatter.json` controls an optional clean text
+overlay: black, centered, bold sans-serif text on the existing white canvas.
+It supports a maximum width, one to three lines by default, word-aware wrapping,
+automatic font shrinking, safe truncation, line spacing, text-box placement,
+and optional outline or shadow settings. No subtitle track, logo, watermark, or
+AI-generated text is added.
+
+Hook text is chosen in this order:
+
+1. The explicit `--hook` value for a one-clip validation run.
+2. `hook_text` already stored on the clip metadata record.
+3. The original source title when `fallback_to_source_title` is enabled.
+
+If no hook is available, or `hook.enabled` is `false`, formatting continues
+normally without text and records `hook_status: skipped`. A completed overlay
+records `hook_text`, `hook_source`, and `hook_status: rendered`; failures remain
+retryable with `hook_status: failed` and `hook_error`.
+
+To set a persistent manual hook, add `hook_text` to the clip's local metadata
+record. For a quick one-clip override, use the command in the Run section.
+
+### Fonts
+
+By default, `hook.font_path` is `null`, so the renderer uses a safe bold system
+font where one is available. To choose a font yourself, place a permitted `.ttf`
+or `.otf` file in `assets/fonts/` and set a relative path such as
+`assets/fonts/MyFont-Bold.ttf` in `config/formatter.json`. Font files are not
+provided or committed by this project. When the configured file is missing, the
+renderer tries platform system fonts and then Pillow's built-in fallback font,
+logging the fallback it used.
 
 ### Formatter Configuration
 
@@ -133,6 +165,8 @@ default. It includes:
   `encoding_preset`.
 - `overwrite` and `maximum_clips_per_run` queue safeguards.
 - `enabled`, for intentionally enabling formatting in a normal pipeline run.
+- `hook`, including font, wrapping, alignment, box, fallback-title, and optional
+  outline/shadow settings.
 
 ## Run
 
@@ -178,6 +212,19 @@ This formats at most one downloaded, pending clip and leaves its original file
 in `clips/pending/`. It requires local `ffmpeg` and `ffprobe`; no real clip is
 included in the repository.
 
+To render one explicit manual hook without overwriting an existing reference
+output, run:
+
+```bash
+python run_pipeline.py --format-one --hook "He looked away for one second..."
+```
+
+This selects one downloaded pending clip, or a ready clip when no pending clip
+exists, and writes a hook-specific MP4 beside prior outputs in `clips/ready/`.
+The file name is based on the clip ID plus a stable hook-text digest, while the
+metadata points to the newest ready render. The original pending download and
+any previous ready reference file are retained.
+
 The downloader prints a summary such as:
 
 ```text
@@ -210,6 +257,6 @@ maximum age, sorting mode, and NSFW handling.
 
 ## Not Yet Implemented
 
-There are no captions, hook-text rendering, logos, watermarks, AI analysis,
+There are no captions, logos, watermarks, AI hook generation, AI analysis,
 queueing, or Instagram posting. FFmpeg is used only for downloader stream
 merges and the local vertical formatting stage.

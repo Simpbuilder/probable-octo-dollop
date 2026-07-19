@@ -7,6 +7,13 @@ from .ffmpeg_client import (
     FfmpegProcessError,
 )
 from .formatter import PendingClipFormatter
+from .hooks import (
+    HookRenderError,
+    HookRenderResult,
+    HookSelection,
+    PillowHookRenderer,
+    resolve_hook_selection,
+)
 from .layout import calculate_fit_layout
 from .models import (
     FormatRequest,
@@ -25,7 +32,12 @@ __all__ = [
     "FormatRequest",
     "FormatResult",
     "FormatSummary",
+    "HookRenderError",
+    "HookRenderResult",
+    "HookSelection",
     "InputMediaProperties",
     "PendingClipFormatter",
+    "PillowHookRenderer",
     "VideoLayout",
+    "resolve_hook_selection",
 ]
