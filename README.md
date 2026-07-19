@@ -104,8 +104,10 @@ The `downloader` block in `config/collector.json` controls:
 The formatter selects clips with `download_status: downloaded`,
 `processing_status: pending`, and an existing `local_file_path`. It keeps the
 original download in `clips/pending/` and creates a separate ready MP4 in
-`clips/ready/`. Metadata records the ready-file path and its 1080x1920 output
+`clips/ready/plain/` when no hook is rendered or `clips/ready/hooked/` when it
+is. Metadata records the final ready-file path and its 1080x1920 output
 dimensions while preserving source dimensions and the original local path.
+Existing files already in `clips/ready/` are retained in place.
 
 ### Fit Layout
 
@@ -157,7 +159,9 @@ logging the fallback it used.
 `config/formatter.json` controls the local formatter and is disabled by
 default. It includes:
 
-- `output_directory`, `output_width`, `output_height`, and `background_color`.
+- `output_directory`, the `clips/ready/` root that routes new plain and hooked
+  renders into their respective subdirectories, plus `output_width`,
+  `output_height`, and `background_color`.
 - `horizontal_margin`, `top_text_area_height`, `bottom_margin`, and maximum
   video width and height.
 - `crop_mode`, which must remain `fit` for no-crop output.
@@ -220,10 +224,10 @@ python run_pipeline.py --format-one --hook "He looked away for one second..."
 ```
 
 This selects one downloaded pending clip, or a ready clip when no pending clip
-exists, and writes a hook-specific MP4 beside prior outputs in `clips/ready/`.
-The file name is based on the clip ID plus a stable hook-text digest, while the
-metadata points to the newest ready render. The original pending download and
-any previous ready reference file are retained.
+exists, and writes a hook-specific MP4 in `clips/ready/hooked/`. The file name
+is based on the clip ID plus a stable hook-text digest, while the metadata points
+to the newest ready render. The original pending download and any previous ready
+reference file are retained.
 
 The downloader prints a summary such as:
 

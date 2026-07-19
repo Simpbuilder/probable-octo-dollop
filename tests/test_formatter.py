@@ -186,7 +186,11 @@ class PendingClipFormatterTests(unittest.TestCase):
             self.assertEqual(summary.formatted, 1)
             self.assertEqual(updated_clip.processing_status, "ready")
             self.assertEqual(updated_clip.local_file_path, source_file)
-            self.assertEqual(updated_clip.formatted_file_path, (ready_directory / "format-success.mp4").resolve())
+            self.assertEqual(
+                updated_clip.formatted_file_path,
+                formatted_output_path(ready_directory, clip.unique_id).resolve(),
+            )
+            self.assertEqual(updated_clip.formatted_file_path.parent.name, "plain")
             self.assertEqual((updated_clip.formatted_width, updated_clip.formatted_height), (1080, 1920))
             self.assertIsNone(updated_clip.format_error)
             self.assertTrue(updated_clip.formatted_file_path.is_file())
@@ -203,7 +207,10 @@ class PendingClipFormatterTests(unittest.TestCase):
 
             updated_clip = load_all_clip_metadata(metadata_file)[0]
             self.assertEqual(summary.formatted, 1)
-            self.assertEqual(updated_clip.formatted_file_path, (ready_directory / "format_safe_name.mp4").resolve())
+            self.assertEqual(
+                updated_clip.formatted_file_path,
+                formatted_output_path(ready_directory, clip.unique_id).resolve(),
+            )
 
     def test_missing_input_file_remains_pending_for_retry(self) -> None:
         """Missing downloaded media stores an error and does not call ffprobe."""
@@ -291,6 +298,7 @@ class PendingClipFormatterTests(unittest.TestCase):
             self.assertEqual(updated_clip.processing_status, "ready")
             self.assertEqual(client.inspect_requests, [])
             self.assertEqual(output_file.read_bytes(), b"existing ready media")
+            self.assertEqual(updated_clip.formatted_file_path, output_file.resolve())
 
     def test_one_failed_clip_does_not_stop_later_formatting(self) -> None:
         """A bad source file does not prevent a later valid queue item from becoming ready."""
@@ -381,6 +389,7 @@ class PendingClipFormatterTests(unittest.TestCase):
                 updated_clip.formatted_file_path,
                 formatted_output_path(ready_directory, clip.unique_id, hook_text).resolve(),
             )
+            self.assertEqual(updated_clip.formatted_file_path.parent.name, "hooked")
 
     def test_source_title_is_used_when_no_manual_hook_is_stored(self) -> None:
         """The configured title fallback is explicit in metadata after a successful render."""
@@ -407,6 +416,7 @@ class PendingClipFormatterTests(unittest.TestCase):
             self.assertEqual(updated_clip.hook_text, clip.title)
             self.assertEqual(updated_clip.hook_source, "source_title")
             self.assertEqual(updated_clip.hook_status, "rendered")
+            self.assertEqual(updated_clip.formatted_file_path.parent.name, "hooked")
 
     def test_no_hook_text_formats_normally_when_title_fallback_is_disabled(self) -> None:
         """A no-hook clip still follows the original formatter path and output name."""
@@ -431,7 +441,51 @@ class PendingClipFormatterTests(unittest.TestCase):
             self.assertEqual(summary.formatted, 1)
             self.assertEqual(renderer.selections, [])
             self.assertEqual(updated_clip.hook_status, "skipped")
-            self.assertEqual(updated_clip.formatted_file_path, (ready_directory / "hook-none.mp4").resolve())
+            self.assertEqual(
+                updated_clip.formatted_file_path,
+                formatted_output_path(ready_directory, clip.unique_id).resolve(),
+            )
+            self.assertEqual(updated_clip.formatted_file_path.parent.name, "plain")
+
+    def test_plain_and_hooked_outputs_use_separate_ready_directories(self) -> None:
+        """No-hook and hook renders retain their filenames in separate ready subdirectories."""
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            plain_clip = make_clip("plain-output", self.create_source_file(root, "plain-output"))
+            hook_text = "A clear hook"
+            hooked_clip = replace(
+                make_clip("hooked-output", self.create_source_file(root, "hooked-output")),
+                hook_text=hook_text,
+                hook_source="manual",
+            )
+            metadata_file, ready_directory, config = self.make_environment(
+                [plain_clip, hooked_clip],
+                hook_config=HookConfig(enabled=True, fallback_to_source_title=False),
+            )
+
+            summary = self.make_formatter(
+                metadata_file,
+                config,
+                FakeFfmpegClient(),
+                FakeHookRenderer(),
+            ).run()
+
+            clips_by_id = {clip.unique_id: clip for clip in load_all_clip_metadata(metadata_file)}
+            plain_output = clips_by_id[plain_clip.unique_id].formatted_file_path
+            hooked_output = clips_by_id[hooked_clip.unique_id].formatted_file_path
+            self.assertEqual(summary.formatted, 2)
+            self.assertEqual(
+                plain_output,
+                formatted_output_path(ready_directory, plain_clip.unique_id).resolve(),
+            )
+            self.assertEqual(
+                hooked_output,
+                formatted_output_path(ready_directory, hooked_clip.unique_id, hook_text).resolve(),
+            )
+            self.assertEqual(plain_output.parent, ready_directory / "plain")
+            self.assertEqual(hooked_output.parent, ready_directory / "hooked")
+            self.assertTrue(plain_output.is_file())
+            self.assertTrue(hooked_output.is_file())
 
     def test_disabled_hooks_preserve_stored_manual_text_without_rendering_it(self) -> None:
         """Turning hooks off preserves a later-use manual hook while rendering the base video."""
@@ -532,6 +586,7 @@ class PendingClipFormatterTests(unittest.TestCase):
             )
             ready_directory.mkdir(parents=True, exist_ok=True)
             reference_output = formatted_output_path(ready_directory, clip.unique_id)
+            reference_output.parent.mkdir(parents=True, exist_ok=True)
             reference_output.write_bytes(b"reference ready media")
             hook_text = "He looked away for one second..."
 

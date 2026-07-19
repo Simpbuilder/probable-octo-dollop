@@ -132,7 +132,7 @@ class PendingClipFormatter:
 
             input_properties = self._ffmpeg_client.inspect(input_file)
             layout = calculate_fit_layout(input_properties, self._config)
-            self._config.output_directory.mkdir(parents=True, exist_ok=True)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
             if selection is not None:
                 hook_attempted = True
                 with TemporaryDirectory(prefix="viral-clip-hook-") as temporary_directory:
@@ -206,13 +206,16 @@ class PendingClipFormatter:
         )
 
     def _existing_output_file(self, output_file: Path) -> Path | None:
-        """Return only the expected stable target so a changed hook cannot reuse another render."""
-        if not output_file.is_file():
-            return None
-        try:
-            return ensure_path_is_within_directory(output_file, self._config.output_directory)
-        except ValueError:
-            return None
+        """Return a routed target or a same-name root-level legacy output without moving it."""
+        legacy_output_file = self._config.output_directory / output_file.name
+        for candidate in (output_file, legacy_output_file):
+            if not candidate.is_file():
+                continue
+            try:
+                return ensure_path_is_within_directory(candidate, self._config.output_directory)
+            except ValueError:
+                continue
+        return None
 
     def _resolve_input_file(self, local_file_path: Path | None) -> Path:
         """Resolve stored absolute and legacy project-relative downloaded file paths."""
