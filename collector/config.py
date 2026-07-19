@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from .models import (
     CollectorConfig,
+    DEFAULT_BLOCKED_HOOK_PHRASES,
     DownloaderConfig,
     FormatterConfig,
     HookConfig,
@@ -274,6 +275,12 @@ def _parse_hook_generation_config(data: Mapping[str, Any] | None) -> HookGenerat
             maximum_characters=_required_int(data, "maximum_characters", "hooks.json"),
             maximum_clips_per_run=_required_int(data, "maximum_clips_per_run", "hooks.json"),
             automatic_selection=_required_bool(data, "automatic_selection", "hooks.json"),
+            blocked_phrases=_optional_string_tuple(
+                data,
+                "blocked_phrases",
+                "hooks.json",
+                default=DEFAULT_BLOCKED_HOOK_PHRASES,
+            ),
         )
     except ValueError as error:
         raise ConfigurationError(f"Invalid hook generation settings: {error}") from error
@@ -420,9 +427,18 @@ def _optional_nonnegative_int(
     return value
 
 
-def _optional_string_tuple(data: Mapping[str, Any], field_name: str, context: str) -> tuple[str, ...]:
+def _optional_string_tuple(
+    data: Mapping[str, Any],
+    field_name: str,
+    context: str,
+    *,
+    default: tuple[str, ...] = (),
+) -> tuple[str, ...]:
     """Read an optional list of strings as an immutable tuple."""
-    value = data.get(field_name, [])
-    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+    value = data.get(field_name, list(default))
+    if (
+        not isinstance(value, list)
+        or any(not isinstance(item, str) or not item.strip() for item in value)
+    ):
         raise ConfigurationError(f"{context} field '{field_name}' must be a list of strings.")
-    return tuple(value)
+    return tuple(item.strip() for item in value)

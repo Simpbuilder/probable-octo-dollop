@@ -141,7 +141,7 @@ class HookGenerationTests(unittest.TestCase):
         """Cosmetic duplicates and character-limit violations are rejected before metadata writes."""
         with self.assertRaises(HookGenerationResponseError):
             parse_hook_candidates(
-                candidate_response("Wait for it", "Wait for it!", "Then he looked"),
+                candidate_response("That was wild", "That was wild!", "Then he looked"),
                 60,
             )
         with self.assertRaises(HookGenerationResponseError):
@@ -149,6 +149,95 @@ class HookGenerationTests(unittest.TestCase):
                 candidate_response("x" * 61, "Then he looked", "Nobody saw this"),
                 60,
             )
+        with self.assertRaises(HookGenerationResponseError):
+            parse_hook_candidates(
+                candidate_response(
+                    "One two three four five six seven eight nine ten",
+                    "Then he looked",
+                    "Nobody saw this",
+                ),
+                60,
+            )
+
+    def test_blocked_generic_candidates_are_regenerated(self) -> None:
+        """A template-like result triggers one clean retry before the clip is marked failed."""
+        with TemporaryDirectory() as temporary_directory:
+            metadata_file = Path(temporary_directory) / "clips.json"
+            save_clip_metadata(metadata_file, make_clip())
+            client = FakeHookClient(
+                [
+                    candidate_response(
+                        "Prepare for a surprise",
+                        "Wait for the ending",
+                        "What happens next?",
+                    ),
+                    candidate_response(
+                        "He said WHAT?",
+                        "That was unexpected",
+                        "This went wrong fast",
+                    ),
+                ]
+            )
+
+            summary = self.make_generator(metadata_file, client).run()
+
+            updated_clip = load_all_clip_metadata(metadata_file)[0]
+            self.assertEqual(summary.generated, 1)
+            self.assertEqual(len(client.calls), 2)
+            self.assertEqual(
+                updated_clip.hook_candidates,
+                ("He said WHAT?", "That was unexpected", "This went wrong fast"),
+            )
+            self.assertIn("Previous hook set was rejected", client.calls[1]["input_text"])
+
+    def test_numbered_bulleted_and_quoted_candidates_are_cleaned(self) -> None:
+        """Model list decoration is removed without changing natural caption punctuation."""
+        candidates = parse_hook_candidates(
+            candidate_response(
+                '1. "He said WHAT?"',
+                "- 'This went wrong fast'",
+                "3) The timing was perfect",
+            ),
+            60,
+        )
+
+        self.assertEqual(
+            candidates,
+            ("He said WHAT?", "This went wrong fast", "The timing was perfect"),
+        )
+
+    def test_concise_casual_candidates_preserve_mixed_punctuation(self) -> None:
+        """Short casual options retain apostrophes, ellipses, and a single natural reaction mark."""
+        candidates = parse_hook_candidates(
+            candidate_response(
+                "He said WHAT?",
+                "I couldn't believe it...",
+                "This was not the plan",
+            ),
+            60,
+        )
+
+        self.assertEqual(candidates[0], "He said WHAT?")
+        self.assertEqual(candidates[1], "I couldn't believe it...")
+        self.assertEqual(candidates[2], "This was not the plan")
+        self.assertTrue(all(2 <= len(candidate.split()) <= 7 for candidate in candidates))
+        self.assertEqual(len({candidate.casefold() for candidate in candidates}), 3)
+
+    def test_generation_prompt_requests_three_distinct_casual_styles(self) -> None:
+        """The API prompt explicitly separates reaction, commentary, and sarcastic styles."""
+        with TemporaryDirectory() as temporary_directory:
+            metadata_file = Path(temporary_directory) / "clips.json"
+            save_clip_metadata(metadata_file, make_clip())
+            client = FakeHookClient(
+                [candidate_response("Bro had one job", "The timing was perfect", "He really tried that")]
+            )
+
+            self.make_generator(metadata_file, client).run()
+
+            instructions = client.calls[0]["instructions"]
+            self.assertIn("three noticeably different styles", instructions)
+            self.assertIn("two to seven words", instructions)
+            self.assertIn("hard maximum of nine words", instructions)
 
     def test_api_failure_does_not_stop_later_clips(self) -> None:
         """A failed API call stores an error while a later clip can still generate candidates."""

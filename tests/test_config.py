@@ -37,6 +37,7 @@ class CollectorConfigTests(unittest.TestCase):
         self.assertIsNotNone(config.hook_generation_config)
         self.assertFalse(config.hook_generation_config.enabled)
         self.assertFalse(config.hook_generation_config.automatic_selection)
+        self.assertIn("what happens next", config.hook_generation_config.blocked_phrases)
 
     def test_rejects_enabled_reddit_without_subreddits(self) -> None:
         """Validation catches a missing Reddit target list before a run starts."""

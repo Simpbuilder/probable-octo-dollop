@@ -3,5 +3,18 @@
   "model": "gpt-4o-mini",
   "maximum_characters": 60,
   "maximum_clips_per_run": 10,
-  "automatic_selection": false
+  "automatic_selection": false,
+  "blocked_phrases": [
+    "what happens next",
+    "wait for",
+    "prepare for",
+    "you won't believe",
+    "you wont believe",
+    "this will shock you",
+    "watch until the end",
+    "unexpected ending",
+    "surprising",
+    "shocking",
+    "unbelievable"
+  ]
 }

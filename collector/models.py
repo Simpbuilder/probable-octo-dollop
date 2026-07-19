@@ -18,6 +18,21 @@ HookGenerationStatus = Literal["generated", "failed", "rejected"]
 HorizontalAlignment = Literal["left", "center", "right"]
 
 
+DEFAULT_BLOCKED_HOOK_PHRASES = (
+    "what happens next",
+    "wait for",
+    "prepare for",
+    "you won't believe",
+    "you wont believe",
+    "this will shock you",
+    "watch until the end",
+    "unexpected ending",
+    "surprising",
+    "shocking",
+    "unbelievable",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class SourceConfig:
     """Collection rules for one potential media source."""
@@ -312,6 +327,7 @@ class HookGenerationConfig:
     maximum_characters: int = 60
     maximum_clips_per_run: int = 10
     automatic_selection: bool = False
+    blocked_phrases: tuple[str, ...] = DEFAULT_BLOCKED_HOOK_PHRASES
 
     def __post_init__(self) -> None:
         """Reject unsafe queue limits and incomplete model settings before API use."""
@@ -321,6 +337,17 @@ class HookGenerationConfig:
             raise ValueError("hook generation maximum_characters must be greater than zero.")
         if self.maximum_clips_per_run <= 0:
             raise ValueError("hook generation maximum_clips_per_run must be greater than zero.")
+        if not isinstance(self.blocked_phrases, tuple):
+            raise ValueError("hook generation blocked_phrases must be an immutable tuple.")
+        if any(not isinstance(phrase, str) for phrase in self.blocked_phrases):
+            raise ValueError("hook generation blocked_phrases must contain strings.")
+        normalized_phrases = [phrase.strip().casefold() for phrase in self.blocked_phrases]
+        if not normalized_phrases:
+            raise ValueError("hook generation blocked_phrases must not be empty.")
+        if any(not phrase for phrase in normalized_phrases):
+            raise ValueError("hook generation blocked_phrases must not contain empty values.")
+        if len(set(normalized_phrases)) != len(normalized_phrases):
+            raise ValueError("hook generation blocked_phrases must be distinct.")
 
 
 @dataclass(frozen=True, slots=True)

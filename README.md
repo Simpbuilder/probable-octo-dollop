@@ -151,9 +151,10 @@ record. For a quick one-clip override, use the command in the Run section.
 
 `config/hooks.json` controls optional OpenAI hook generation separately from
 rendering. It is disabled by default and contains the model, maximum hook
-characters, generation queue limit, and `automatic_selection` setting. The
-generator uses only the original post title and available saved metadata; it
-does not inspect video content, download media, or render a video.
+characters, generation queue limit, `automatic_selection` setting, and a
+`blocked_phrases` list. The generator uses only the original post title and
+available saved metadata; it does not inspect video content, download media, or
+render a video.
 
 Generate exactly three short, distinct candidate hooks for eligible clips with:
 
@@ -162,8 +163,11 @@ py run_pipeline.py --generate-hooks
 ```
 
 Use `--force-hooks` with that command to replace existing candidates. Clips with
-saved candidates are otherwise skipped. API failures are recorded on the clip as
-retryable metadata errors and do not stop later clips.
+saved candidates are otherwise skipped. Generation asks for three distinct,
+casual English captions that prefer two to seven words and never exceed nine.
+The configured blocked phrases prevent generic clickbait; a blocked response is
+retried once with the same source metadata. API failures are recorded on the
+clip as retryable metadata errors and do not stop later clips.
 
 Review candidates locally before formatting with:
 
