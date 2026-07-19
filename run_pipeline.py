@@ -1,9 +1,19 @@
-"""Run configured manual URL and Reddit metadata collectors from the project root."""
+"""Run configured collectors and optionally download pending clip media."""
 
 from __future__ import annotations
 
+import argparse
+from collections.abc import Sequence
 import logging
 from pathlib import Path
+
+from downloader import (
+    PendingClipDownloader,
+    YtDlpClientError,
+    YtDlpDependencyError,
+    create_yt_dlp_client,
+)
+from downloader.models import DownloadSummary
 
 from collector import (
     CollectionSummary,
@@ -23,6 +33,17 @@ from collector.reddit_client import RedditClientError
 def configure_logging() -> None:
     """Configure concise console logging for recoverable collector failures."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+
+def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse explicit runtime controls without changing the saved pipeline mode."""
+    parser = argparse.ArgumentParser(description="Collect clip metadata and download pending media.")
+    parser.add_argument(
+        "--download",
+        action="store_true",
+        help="Download pending clips after configured collectors finish.",
+    )
+    return parser.parse_args(arguments)
 
 
 def selected_collectors(pipeline_mode: PipelineMode) -> tuple[str, ...]:
@@ -56,6 +77,15 @@ def print_manual_url_summary(summary: ManualUrlSummary) -> None:
     print(f"Errors: {summary.errors}")
 
 
+def print_download_summary(summary: DownloadSummary) -> None:
+    """Print the stable terminal summary for a pending-media download pass."""
+    print("Download queue")
+    print(f"Pending: {summary.pending}")
+    print(f"Downloaded: {summary.downloaded}")
+    print(f"Skipped: {summary.skipped}")
+    print(f"Failed: {summary.failed}")
+
+
 def run_manual_url_collector(config: CollectorConfig, project_root: Path) -> int:
     """Run the local URL queue without requiring Reddit credentials or network access."""
     summary = ManualUrlCollector(
@@ -81,9 +111,41 @@ def run_reddit_api_collector(config: CollectorConfig, project_root: Path) -> int
     return 1 if summary.authentication_failed else 0
 
 
-def main() -> int:
+def should_run_downloader(config: CollectorConfig, explicit_download: bool) -> bool:
+    """Require an explicit flag unless the saved downloader setting intentionally enables it."""
+    return explicit_download or bool(
+        config.downloader_config is not None and config.downloader_config.enabled
+    )
+
+
+def run_pending_clip_downloader(config: CollectorConfig) -> int:
+    """Run the yt-dlp downloader and report missing dependencies without a traceback."""
+    if config.downloader_config is None:
+        print("Downloader not started: downloader configuration is missing.")
+        return 2
+    try:
+        media_client = create_yt_dlp_client()
+    except YtDlpDependencyError as error:
+        print(f"Downloader not started: {error}")
+        return 2
+
+    try:
+        summary = PendingClipDownloader(
+            metadata_file=config.metadata_file,
+            config=config.downloader_config,
+            media_client=media_client,
+        ).run()
+    except YtDlpClientError as error:
+        print(f"Downloader not started: {error}")
+        return 2
+    print_download_summary(summary)
+    return 1 if summary.failed else 0
+
+
+def main(arguments: Sequence[str] | None = None) -> int:
     """Load configuration and run the manual, Reddit, or combined pipeline mode."""
     configure_logging()
+    parsed_arguments = parse_arguments(arguments)
     project_root = Path(__file__).resolve().parent
     try:
         config = load_collector_config(project_root / "config")
@@ -97,6 +159,8 @@ def main() -> int:
             exit_code = max(exit_code, run_manual_url_collector(config, project_root))
         else:
             exit_code = max(exit_code, run_reddit_api_collector(config, project_root))
+    if should_run_downloader(config, parsed_arguments.download):
+        exit_code = max(exit_code, run_pending_clip_downloader(config))
     return exit_code
 
 

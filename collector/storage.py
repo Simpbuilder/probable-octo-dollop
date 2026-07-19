@@ -68,6 +68,18 @@ def load_clip_metadata(metadata_file: Path, unique_id: str) -> ClipMetadata | No
     )
 
 
+def update_clip_metadata(metadata_file: Path, updated_clip: ClipMetadata) -> None:
+    """Atomically replace one stored clip record identified by its unique ID."""
+    metadata_file = Path(metadata_file)
+    clips = load_all_clip_metadata(metadata_file)
+    for index, existing_clip in enumerate(clips):
+        if existing_clip.unique_id == updated_clip.unique_id:
+            clips[index] = updated_clip
+            _write_clip_metadata(metadata_file, clips)
+            return
+    raise KeyError(f"Clip metadata not found: {updated_clip.unique_id}")
+
+
 def clip_exists(metadata_file: Path, clip: ClipMetadata) -> bool:
     """Return whether a clip ID or source post is already represented in storage."""
     return any(

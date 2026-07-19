@@ -56,6 +56,7 @@ class CollectorConfig:
     output_folders: Mapping[str, Path]
     metadata_file: Path
     pipeline_mode: PipelineMode = "reddit_api"
+    downloader_config: "DownloaderConfig | None" = None
 
     @property
     def enabled_sources(self) -> tuple[str, ...]:
@@ -94,6 +95,7 @@ class ClipMetadata:
     download_status: DownloadStatus = "pending"
     processing_status: ProcessingStatus = "pending"
     added_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    download_error: str | None = None
 
     def __post_init__(self) -> None:
         """Validate stable metadata before it is written to storage."""
@@ -122,6 +124,8 @@ class ClipMetadata:
             raise ValueError("download_status is not supported.")
         if self.processing_status not in {"pending", "approved", "rejected", "ready", "posted"}:
             raise ValueError("processing_status is not supported.")
+        if self.download_error is not None and not self.download_error.strip():
+            raise ValueError("download_error must be a non-empty string or null.")
 
     def to_dict(self) -> dict[str, object]:
         """Serialize the record to JSON-compatible primitives."""
@@ -144,6 +148,7 @@ class ClipMetadata:
             "download_status": self.download_status,
             "processing_status": self.processing_status,
             "added_at": self.added_at.isoformat(),
+            "download_error": self.download_error,
         }
 
     @classmethod
@@ -167,8 +172,39 @@ class ClipMetadata:
             height=_optional_int(data, "height"),
             download_status=_required_string(data, "download_status"),  # type: ignore[arg-type]
             processing_status=_required_string(data, "processing_status"),  # type: ignore[arg-type]
+            download_error=_optional_string(data, "download_error"),
             added_at=_required_datetime(data, "added_at"),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class DownloaderConfig:
+    """Validated local settings for downloading pending media files."""
+
+    directory: Path
+    preferred_format: str = "mp4"
+    maximum_duration_seconds: int | None = 90
+    maximum_file_size_bytes: int | None = 104_857_600
+    retries: int = 2
+    timeout_seconds: int = 30
+    overwrite: bool = False
+    downloads_per_run: int = 5
+    enabled: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate settings before a downloader can make filesystem changes."""
+        if not self.preferred_format.strip():
+            raise ValueError("preferred_format must not be empty.")
+        if self.maximum_duration_seconds is not None and self.maximum_duration_seconds <= 0:
+            raise ValueError("maximum_duration_seconds must be greater than zero or null.")
+        if self.maximum_file_size_bytes is not None and self.maximum_file_size_bytes <= 0:
+            raise ValueError("maximum_file_size_bytes must be greater than zero or null.")
+        if self.retries < 0:
+            raise ValueError("retries must be zero or greater.")
+        if self.timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be greater than zero.")
+        if self.downloads_per_run <= 0:
+            raise ValueError("downloads_per_run must be greater than zero.")
 
 
 def _required_string(data: Mapping[str, object], field_name: str) -> str:

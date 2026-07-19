@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,6 +14,7 @@ from collector.storage import (
     clip_exists,
     load_clip_metadata,
     save_clip_metadata,
+    update_clip_metadata,
 )
 
 
@@ -49,6 +51,15 @@ class MetadataStorageTests(unittest.TestCase):
             self.assertIsNotNone(loaded_clip)
             self.assertEqual(loaded_clip.to_dict(), clip.to_dict())
 
+    def test_loads_metadata_written_before_download_error_was_added(self) -> None:
+        """Older metadata remains readable after the downloader state extension."""
+        clip_data = make_clip().to_dict()
+        clip_data.pop("download_error")
+
+        loaded_clip = ClipMetadata.from_dict(clip_data)
+
+        self.assertIsNone(loaded_clip.download_error)
+
     def test_detects_duplicate_source_post(self) -> None:
         """A changed pipeline ID cannot duplicate a source post already stored."""
         with TemporaryDirectory() as temporary_directory:
@@ -60,3 +71,21 @@ class MetadataStorageTests(unittest.TestCase):
             self.assertTrue(clip_exists(metadata_file, duplicate_clip))
             with self.assertRaises(DuplicateClipError):
                 save_clip_metadata(metadata_file, duplicate_clip)
+
+    def test_updates_existing_metadata_record(self) -> None:
+        """A downloader can atomically replace one stored record after a download."""
+        with TemporaryDirectory() as temporary_directory:
+            metadata_file = Path(temporary_directory) / "clips.json"
+            clip = make_clip()
+            updated_clip = replace(
+                clip,
+                local_file_path=Path("clips/pending/reddit-abc123.mp4"),
+                download_status="downloaded",
+            )
+            save_clip_metadata(metadata_file, clip)
+
+            update_clip_metadata(metadata_file, updated_clip)
+
+            loaded_clip = load_clip_metadata(metadata_file, clip.unique_id)
+            self.assertIsNotNone(loaded_clip)
+            self.assertEqual(loaded_clip.download_status, "downloaded")

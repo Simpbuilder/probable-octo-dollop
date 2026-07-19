@@ -9,8 +9,9 @@ import unittest
 from unittest.mock import patch
 
 from collector.manual_url_collector import ManualUrlCollector, normalize_manual_url
+from collector.models import CollectorConfig, DownloaderConfig
 from collector.storage import load_all_clip_metadata
-from run_pipeline import selected_collectors
+from run_pipeline import parse_arguments, selected_collectors, should_run_downloader
 
 
 NOW = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
@@ -124,6 +125,26 @@ class PipelineModeTests(unittest.TestCase):
         self.assertEqual(selected_collectors("manual_urls"), ("manual_urls",))
         self.assertEqual(selected_collectors("reddit_api"), ("reddit_api",))
         self.assertEqual(selected_collectors("both"), ("manual_urls", "reddit_api"))
+
+    def test_downloader_requires_explicit_opt_in_when_disabled(self) -> None:
+        """Normal manual intake does not download URLs unless enabled or flagged."""
+        disabled_config = CollectorConfig(
+            source_configs={},
+            output_folders={},
+            metadata_file=Path("metadata/clips.json"),
+            downloader_config=DownloaderConfig(directory=Path("clips/pending"), enabled=False),
+        )
+        enabled_config = CollectorConfig(
+            source_configs={},
+            output_folders={},
+            metadata_file=Path("metadata/clips.json"),
+            downloader_config=DownloaderConfig(directory=Path("clips/pending"), enabled=True),
+        )
+
+        self.assertFalse(should_run_downloader(disabled_config, explicit_download=False))
+        self.assertTrue(should_run_downloader(disabled_config, explicit_download=True))
+        self.assertTrue(should_run_downloader(enabled_config, explicit_download=False))
+        self.assertTrue(parse_arguments(["--download"]).download)
 
 
 def create_expected_id(original_url: str) -> str:

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from .models import CollectorConfig, PipelineMode, SourceConfig
+from .models import CollectorConfig, DownloaderConfig, PipelineMode, SourceConfig
 
 
 REQUIRED_OUTPUT_FOLDERS = frozenset({"pending", "approved", "rejected", "ready", "posted", "metadata"})
@@ -38,12 +38,14 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
     pipeline_mode = _optional_string(
         collector_data, "pipeline_mode", "collector.json", default="reddit_api"
     )
+    downloader_config = _parse_downloader_config(collector_data, project_root)
 
     config = CollectorConfig(
         source_configs=source_configs,
         output_folders=output_folders,
         metadata_file=metadata_file,
         pipeline_mode=pipeline_mode,  # type: ignore[arg-type]
+        downloader_config=downloader_config,
     )
     _validate_collector_config(config)
     return config
@@ -116,6 +118,43 @@ def _parse_output_folders(data: Mapping[str, Any], project_root: Path) -> dict[s
     return output_folders
 
 
+def _parse_downloader_config(data: Mapping[str, Any], project_root: Path) -> DownloaderConfig:
+    """Load downloader settings while retaining safe defaults for older configs."""
+    raw_config = data.get("downloader", {})
+    if not isinstance(raw_config, dict):
+        raise ConfigurationError("collector.json field 'downloader' must be an object.")
+
+    try:
+        return DownloaderConfig(
+            directory=_resolve_path(
+                _optional_string(
+                    raw_config, "directory", "downloader", default="clips/pending"
+                ),
+                project_root,
+            ),
+            preferred_format=_optional_string(
+                raw_config, "preferred_format", "downloader", default="mp4"
+            ).lower(),
+            maximum_duration_seconds=_optional_positive_int_or_none(
+                raw_config, "maximum_duration_seconds", "downloader", default=90
+            ),
+            maximum_file_size_bytes=_optional_positive_int_or_none(
+                raw_config, "maximum_file_size_bytes", "downloader", default=104_857_600
+            ),
+            retries=_optional_nonnegative_int(raw_config, "retries", "downloader", default=2),
+            timeout_seconds=_optional_positive_int(
+                raw_config, "timeout_seconds", "downloader", default=30
+            ),
+            overwrite=_optional_bool(raw_config, "overwrite", "downloader", default=False),
+            downloads_per_run=_optional_positive_int(
+                raw_config, "downloads_per_run", "downloader", default=5
+            ),
+            enabled=_optional_bool(raw_config, "enabled", "downloader", default=False),
+        )
+    except ValueError as error:
+        raise ConfigurationError(f"Invalid downloader settings: {error}") from error
+
+
 def _validate_collector_config(config: CollectorConfig) -> None:
     """Apply cross-file validation after both configuration files are loaded."""
     if not config.enabled_sources:
@@ -134,6 +173,11 @@ def _validate_collector_config(config: CollectorConfig) -> None:
         raise ConfigurationError(f"Reddit top_time_filter must be one of: {allowed_filters}.")
     if config.metadata_file.parent != config.output_path("metadata"):
         raise ConfigurationError("metadata_file must be located inside the metadata output folder.")
+    if (
+        config.downloader_config is not None
+        and config.downloader_config.directory != config.output_path("pending")
+    ):
+        raise ConfigurationError("downloader.directory must match the pending output folder.")
 
 
 def _resolve_path(raw_path: str, project_root: Path) -> Path:
@@ -183,6 +227,42 @@ def _optional_bool(
     value = data.get(field_name, default)
     if not isinstance(value, bool):
         raise ConfigurationError(f"{context} field '{field_name}' must be a boolean.")
+    return value
+
+
+def _optional_positive_int_or_none(
+    data: Mapping[str, Any], field_name: str, context: str, *, default: int | None
+) -> int | None:
+    """Read an optional positive integer, allowing ``null`` for no limit."""
+    value = data.get(field_name, default)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigurationError(
+            f"{context} field '{field_name}' must be a positive integer or null."
+        )
+    return value
+
+
+def _optional_positive_int(
+    data: Mapping[str, Any], field_name: str, context: str, *, default: int
+) -> int:
+    """Read an optional positive integer setting that cannot be null."""
+    value = data.get(field_name, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigurationError(f"{context} field '{field_name}' must be a positive integer.")
+    return value
+
+
+def _optional_nonnegative_int(
+    data: Mapping[str, Any], field_name: str, context: str, *, default: int
+) -> int:
+    """Read an optional integer setting that can be zero but never negative."""
+    value = data.get(field_name, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ConfigurationError(
+            f"{context} field '{field_name}' must be a non-negative integer."
+        )
     return value
 
 

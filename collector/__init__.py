@@ -3,7 +3,7 @@
 from .config import ConfigurationError, load_collector_config
 from .collector import CollectionSummary, RedditMetadataCollector
 from .manual_url_collector import ManualUrlCollector, ManualUrlSummary
-from .models import ClipMetadata, CollectorConfig, PipelineMode, SourceConfig
+from .models import ClipMetadata, CollectorConfig, DownloaderConfig, PipelineMode, SourceConfig
 from .reddit_client import (
     RedditCredentials,
     RedditCredentialsError,
@@ -16,6 +16,7 @@ from .storage import (
     load_all_clip_metadata,
     load_clip_metadata,
     save_clip_metadata,
+    update_clip_metadata,
 )
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "CollectorConfig",
     "ConfigurationError",
     "DuplicateClipError",
+    "DownloaderConfig",
     "ManualUrlCollector",
     "ManualUrlSummary",
     "PipelineMode",
@@ -38,4 +40,5 @@ __all__ = [
     "RedditCredentialsError",
     "RedditMetadataCollector",
     "save_clip_metadata",
+    "update_clip_metadata",
 ]

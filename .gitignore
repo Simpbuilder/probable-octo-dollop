@@ -39,6 +39,8 @@ metadata/processed_urls.txt
 *.temp
 *.bak
 *.swp
+*.part*
+*.ytdl
 tmp/
 temp/
 .DS_Store

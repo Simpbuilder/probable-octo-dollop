@@ -1,5 +1,16 @@
 {
   "pipeline_mode": "manual_urls",
+  "downloader": {
+    "enabled": false,
+    "directory": "clips/pending",
+    "preferred_format": "mp4",
+    "maximum_duration_seconds": 90,
+    "maximum_file_size_bytes": 104857600,
+    "retries": 2,
+    "timeout_seconds": 30,
+    "overwrite": false,
+    "downloads_per_run": 5
+  },
   "output_folders": {
     "pending": "clips/pending",
     "approved": "clips/approved",
