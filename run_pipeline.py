@@ -22,6 +22,13 @@ from formatter import (
     PendingClipFormatter,
 )
 from formatter.models import FormatSummary
+from hook_generator import (
+    HookGenerationClientError,
+    HookGenerationSummary,
+    PendingHookGenerator,
+    create_openai_hook_client,
+    load_openai_api_key,
+)
 
 from collector import (
     CollectionSummary,
@@ -66,6 +73,16 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
     parser.add_argument(
         "--hook",
         help="Use this manual hook text with --format-one without overwriting a prior ready render.",
+    )
+    parser.add_argument(
+        "--generate-hooks",
+        action="store_true",
+        help="Generate three hook candidates from existing clip metadata without rendering video.",
+    )
+    parser.add_argument(
+        "--force-hooks",
+        action="store_true",
+        help="Regenerate candidates even when a clip already has saved hook candidates.",
     )
     return parser.parse_args(arguments)
 
@@ -119,6 +136,15 @@ def print_format_summary(summary: FormatSummary) -> None:
     print(f"Failed: {summary.failed}")
 
 
+def print_hook_generation_summary(summary: HookGenerationSummary) -> None:
+    """Print the stable terminal summary for one metadata-only hook generation pass."""
+    print("Hook generation")
+    print(f"Pending: {summary.pending}")
+    print(f"Generated: {summary.generated}")
+    print(f"Skipped: {summary.skipped}")
+    print(f"Failed: {summary.failed}")
+
+
 def run_manual_url_collector(config: CollectorConfig, project_root: Path) -> int:
     """Run the local URL queue without requiring Reddit credentials or network access."""
     summary = ManualUrlCollector(
@@ -160,6 +186,13 @@ def should_run_formatter(config: CollectorConfig, explicit_format: bool) -> bool
     """Require an explicit flag unless the saved formatter setting intentionally enables it."""
     return explicit_format or bool(
         config.formatter_config is not None and config.formatter_config.enabled
+    )
+
+
+def should_run_hook_generation(config: CollectorConfig, explicit_generation: bool) -> bool:
+    """Allow explicit generation while keeping automatic API usage disabled by default."""
+    return explicit_generation or bool(
+        config.hook_generation_config is not None and config.hook_generation_config.enabled
     )
 
 
@@ -230,6 +263,32 @@ def run_pending_clip_formatter(
     return 1 if summary.failed else 0
 
 
+def run_pending_hook_generator(
+    config: CollectorConfig,
+    project_root: Path,
+    *,
+    force: bool = False,
+) -> int:
+    """Generate hook candidates from metadata without starting any media formatting stage."""
+    if config.hook_generation_config is None:
+        print("Hook generation not started: hook generation configuration is missing.")
+        return 2
+    try:
+        api_key = load_openai_api_key(project_root / ".env")
+        client = create_openai_hook_client(api_key)
+    except HookGenerationClientError as error:
+        print(f"Hook generation not started: {error}")
+        return 2
+
+    summary = PendingHookGenerator(
+        metadata_file=config.metadata_file,
+        config=config.hook_generation_config,
+        client=client,
+    ).run(force=force)
+    print_hook_generation_summary(summary)
+    return 1 if summary.failed else 0
+
+
 def main(arguments: Sequence[str] | None = None) -> int:
     """Load configuration and run the requested collection, download, and formatting stages."""
     configure_logging()
@@ -240,12 +299,27 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if parsed_arguments.hook is not None and not parsed_arguments.hook.strip():
         print("Pipeline not started: --hook must not be blank.")
         return 2
+    if parsed_arguments.force_hooks and not parsed_arguments.generate_hooks:
+        print("Pipeline not started: --force-hooks requires --generate-hooks.")
+        return 2
+    if parsed_arguments.generate_hooks and (
+        parsed_arguments.download or parsed_arguments.format or parsed_arguments.format_one
+    ):
+        print("Pipeline not started: --generate-hooks runs separately from download and format commands.")
+        return 2
     project_root = Path(__file__).resolve().parent
     try:
         config = load_collector_config(project_root / "config")
     except ConfigurationError as error:
         print(f"Pipeline not started: {error}")
         return 2
+
+    if parsed_arguments.generate_hooks:
+        return run_pending_hook_generator(
+            config,
+            project_root,
+            force=parsed_arguments.force_hooks,
+        )
 
     format_requested = parsed_arguments.format or parsed_arguments.format_one
     exit_code = 0
@@ -261,6 +335,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
         format_only=format_requested and not parsed_arguments.download,
     ):
         exit_code = max(exit_code, run_pending_clip_downloader(config))
+    if should_run_hook_generation(config, explicit_generation=False):
+        exit_code = max(exit_code, run_pending_hook_generator(config, project_root))
     if should_run_formatter(config, format_requested):
         exit_code = max(
             exit_code,

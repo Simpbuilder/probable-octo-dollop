@@ -194,7 +194,7 @@ def resolve_hook_selection(
     config: HookConfig,
     manual_hook: str | None = None,
 ) -> HookSelection | None:
-    """Prefer an explicit manual hook, then stored metadata, then an optional source title."""
+    """Prefer an explicit hook, then a reviewed candidate, legacy text, or a source title."""
     if manual_hook is not None:
         normalized_manual_hook = normalize_hook_text(manual_hook)
         if normalized_manual_hook:
@@ -202,6 +202,10 @@ def resolve_hook_selection(
         return None
     if not config.enabled:
         return None
+    if clip.selected_hook is not None:
+        normalized_selected_hook = normalize_hook_text(clip.selected_hook)
+        if normalized_selected_hook:
+            return HookSelection(normalized_selected_hook, "generated")
     if clip.hook_text is not None:
         normalized_hook_text = normalize_hook_text(clip.hook_text)
         if normalized_hook_text:

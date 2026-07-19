@@ -13,7 +13,8 @@ dependencies:
 pip install -r requirements.txt
 ```
 
-This installs PRAW, `python-dotenv`, `yt-dlp`, and Pillow for local hook-text overlays.
+This installs PRAW, `python-dotenv`, `yt-dlp`, Pillow for local hook-text overlays,
+and the OpenAI SDK for optional hook-candidate generation.
 
 ### FFmpeg
 
@@ -128,13 +129,15 @@ overlay: black, centered, bold sans-serif text on the existing white canvas.
 It supports a maximum width, one to three lines by default, word-aware wrapping,
 automatic font shrinking, safe truncation, line spacing, text-box placement,
 and optional outline or shadow settings. No subtitle track, logo, watermark, or
-AI-generated text is added.
+other decorative media is added. Generated hook candidates remain optional and
+require review unless automatic selection is explicitly enabled.
 
 Hook text is chosen in this order:
 
 1. The explicit `--hook` value for a one-clip validation run.
-2. `hook_text` already stored on the clip metadata record.
-3. The original source title when `fallback_to_source_title` is enabled.
+2. A reviewed or automatically selected `selected_hook` candidate.
+3. `hook_text` already stored on the clip metadata record.
+4. The original source title when `fallback_to_source_title` is enabled.
 
 If no hook is available, or `hook.enabled` is `false`, formatting continues
 normally without text and records `hook_status: skipped`. A completed overlay
@@ -143,6 +146,36 @@ retryable with `hook_status: failed` and `hook_error`.
 
 To set a persistent manual hook, add `hook_text` to the clip's local metadata
 record. For a quick one-clip override, use the command in the Run section.
+
+### Hook Generation And Review
+
+`config/hooks.json` controls optional OpenAI hook generation separately from
+rendering. It is disabled by default and contains the model, maximum hook
+characters, generation queue limit, and `automatic_selection` setting. The
+generator uses only the original post title and available saved metadata; it
+does not inspect video content, download media, or render a video.
+
+Generate exactly three short, distinct candidate hooks for eligible clips with:
+
+```bash
+py run_pipeline.py --generate-hooks
+```
+
+Use `--force-hooks` with that command to replace existing candidates. Clips with
+saved candidates are otherwise skipped. API failures are recorded on the clip as
+retryable metadata errors and do not stop later clips.
+
+Review candidates locally before formatting with:
+
+```bash
+py review_hooks.py
+```
+
+For each clip, the reviewer displays its ID, original title, and three options.
+Enter `1`, `2`, or `3` to select a candidate; `c` to enter a custom hook; `s` to
+leave it unchanged; `r` to reject all candidates; or `all 1`, `all 2`, or
+`all 3` to choose one option for the remaining clips. The saved `selected_hook`
+is used by a later formatter run, but generation and review never start that run.
 
 ### Fonts
 
@@ -171,6 +204,10 @@ default. It includes:
 - `enabled`, for intentionally enabling formatting in a normal pipeline run.
 - `hook`, including font, wrapping, alignment, box, fallback-title, and optional
   outline/shadow settings.
+
+`config/hooks.json` separately controls OpenAI generation and manual-review
+limits. Its `automatic_selection` setting is `false` by default, so generated
+candidates require review unless that setting is deliberately enabled.
 
 ## Run
 
@@ -253,6 +290,7 @@ On macOS or Linux, use `cp .env.example .env`. Set these values in `.env`:
 REDDIT_CLIENT_ID=
 REDDIT_CLIENT_SECRET=
 REDDIT_USER_AGENT=
+OPENAI_API_KEY=
 ```
 
 The `.env` file is ignored by Git and must never contain committed credentials.
@@ -261,6 +299,6 @@ maximum age, sorting mode, and NSFW handling.
 
 ## Not Yet Implemented
 
-There are no captions, logos, watermarks, AI hook generation, AI analysis,
-queueing, or Instagram posting. FFmpeg is used only for downloader stream
-merges and the local vertical formatting stage.
+There are no captions, logos, watermarks, video analysis, queueing, or Instagram
+posting. FFmpeg is used only for downloader stream merges and the local vertical
+formatting stage.

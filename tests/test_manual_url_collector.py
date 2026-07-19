@@ -20,6 +20,7 @@ from run_pipeline import (
     should_run_collectors,
     should_run_downloader,
     should_run_formatter,
+    should_run_hook_generation,
 )
 
 
@@ -174,6 +175,8 @@ class PipelineModeTests(unittest.TestCase):
 
         self.assertTrue(parse_arguments(["--format"]).format)
         self.assertTrue(parse_arguments(["--format-one"]).format_one)
+        self.assertTrue(parse_arguments(["--generate-hooks", "--force-hooks"]).generate_hooks)
+        self.assertTrue(parse_arguments(["--generate-hooks", "--force-hooks"]).force_hooks)
         self.assertEqual(
             parse_arguments(["--format-one", "--hook", "Manual hook"]).hook,
             "Manual hook",
@@ -187,8 +190,11 @@ class PipelineModeTests(unittest.TestCase):
         )
         self.assertTrue(should_run_formatter(disabled_config, explicit_format=True))
         self.assertTrue(should_run_formatter(enabled_config, explicit_format=False))
+        self.assertFalse(should_run_hook_generation(disabled_config, explicit_generation=False))
+        self.assertTrue(should_run_hook_generation(disabled_config, explicit_generation=True))
         with redirect_stdout(StringIO()):
             self.assertEqual(main(["--hook", "Manual hook"]), 2)
+            self.assertEqual(main(["--force-hooks"]), 2)
 
 
 def create_expected_id(original_url: str) -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -146,17 +147,21 @@ class HookTextLayoutTests(unittest.TestCase):
 class HookSelectionAndRenderingTests(unittest.TestCase):
     """Verify manual and fallback sources produce a usable transparent overlay."""
 
-    def test_manual_text_wins_then_source_title_is_used_as_fallback(self) -> None:
-        """An explicit hook has priority while a title remains a deterministic fallback."""
+    def test_manual_text_wins_then_selected_hook_and_title_fallback_are_used(self) -> None:
+        """An explicit hook wins, then a reviewed candidate, then the source-title fallback."""
         clip = make_clip(title="A useful title", hook_text="Stored manual hook")
         config = make_hook_config()
 
         manual = resolve_hook_selection(clip, config, manual_hook="CLI hook")
         stored = resolve_hook_selection(clip, config)
+        selected = resolve_hook_selection(
+            replace(clip, selected_hook="Reviewed generated hook"), config
+        )
         fallback = resolve_hook_selection(make_clip(title="A useful title"), config)
 
         self.assertEqual(manual, HookSelection("CLI hook", "manual"))
         self.assertEqual(stored, HookSelection("Stored manual hook", "manual"))
+        self.assertEqual(selected, HookSelection("Reviewed generated hook", "generated"))
         self.assertEqual(fallback, HookSelection("A useful title", "source_title"))
 
     def test_disabled_hook_and_missing_text_return_no_selection(self) -> None:

@@ -9,6 +9,7 @@ from .models import (
     DownloaderConfig,
     FormatterConfig,
     HookConfig,
+    HookGenerationConfig,
     PipelineMode,
     SourceConfig,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "DownloaderConfig",
     "FormatterConfig",
     "HookConfig",
+    "HookGenerationConfig",
     "ManualUrlCollector",
     "ManualUrlSummary",
     "PipelineMode",

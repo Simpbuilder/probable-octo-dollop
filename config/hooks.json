@@ -1,0 +1,7 @@
+{
+  "enabled": false,
+  "model": "gpt-4o-mini",
+  "maximum_characters": 60,
+  "maximum_clips_per_run": 10,
+  "automatic_selection": false
+}

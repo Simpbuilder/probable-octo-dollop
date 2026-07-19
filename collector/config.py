@@ -11,6 +11,7 @@ from .models import (
     DownloaderConfig,
     FormatterConfig,
     HookConfig,
+    HookGenerationConfig,
     PipelineMode,
     SourceConfig,
 )
@@ -49,6 +50,9 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
     formatter_config = _parse_formatter_config(
         _load_optional_json_object(config_directory / "formatter.json"), project_root
     )
+    hook_generation_config = _parse_hook_generation_config(
+        _load_optional_json_object(config_directory / "hooks.json")
+    )
 
     config = CollectorConfig(
         source_configs=source_configs,
@@ -57,6 +61,7 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
         pipeline_mode=pipeline_mode,  # type: ignore[arg-type]
         downloader_config=downloader_config,
         formatter_config=formatter_config,
+        hook_generation_config=hook_generation_config,
     )
     _validate_collector_config(config)
     return config
@@ -256,6 +261,22 @@ def _parse_hook_config(data: Mapping[str, Any], project_root: Path) -> HookConfi
         )
     except ValueError as error:
         raise ConfigurationError(f"Invalid formatter hook settings: {error}") from error
+
+
+def _parse_hook_generation_config(data: Mapping[str, Any] | None) -> HookGenerationConfig:
+    """Load optional OpenAI hook-generation settings with safe disabled defaults."""
+    if data is None:
+        return HookGenerationConfig()
+    try:
+        return HookGenerationConfig(
+            enabled=_required_bool(data, "enabled", "hooks.json"),
+            model=_required_string(data, "model", "hooks.json"),
+            maximum_characters=_required_int(data, "maximum_characters", "hooks.json"),
+            maximum_clips_per_run=_required_int(data, "maximum_clips_per_run", "hooks.json"),
+            automatic_selection=_required_bool(data, "automatic_selection", "hooks.json"),
+        )
+    except ValueError as error:
+        raise ConfigurationError(f"Invalid hook generation settings: {error}") from error
 
 
 def _validate_collector_config(config: CollectorConfig) -> None:

@@ -13,7 +13,8 @@ ProcessingStatus = Literal["pending", "approved", "rejected", "ready", "posted"]
 PipelineMode = Literal["reddit_api", "manual_urls", "both"]
 CropMode = Literal["fit"]
 HookStatus = Literal["rendered", "skipped", "failed"]
-HookSource = Literal["manual", "source_title"]
+HookSource = Literal["manual", "source_title", "generated"]
+HookGenerationStatus = Literal["generated", "failed", "rejected"]
 HorizontalAlignment = Literal["left", "center", "right"]
 
 
@@ -62,6 +63,7 @@ class CollectorConfig:
     pipeline_mode: PipelineMode = "reddit_api"
     downloader_config: "DownloaderConfig | None" = None
     formatter_config: "FormatterConfig | None" = None
+    hook_generation_config: "HookGenerationConfig | None" = None
 
     @property
     def enabled_sources(self) -> tuple[str, ...]:
@@ -109,6 +111,12 @@ class ClipMetadata:
     hook_status: HookStatus | None = None
     hook_source: HookSource | None = None
     hook_error: str | None = None
+    hook_candidates: tuple[str, ...] = ()
+    selected_hook: str | None = None
+    hook_generation_status: HookGenerationStatus | None = None
+    hook_generation_error: str | None = None
+    hook_generated_at: datetime | None = None
+    hook_model: str | None = None
 
     def __post_init__(self) -> None:
         """Validate stable metadata before it is written to storage."""
@@ -149,10 +157,37 @@ class ClipMetadata:
             raise ValueError("hook_text must be a non-empty string or null.")
         if self.hook_status is not None and self.hook_status not in {"rendered", "skipped", "failed"}:
             raise ValueError("hook_status is not supported.")
-        if self.hook_source is not None and self.hook_source not in {"manual", "source_title"}:
+        if self.hook_source is not None and self.hook_source not in {
+            "manual",
+            "source_title",
+            "generated",
+        }:
             raise ValueError("hook_source is not supported.")
         if self.hook_error is not None and not self.hook_error.strip():
             raise ValueError("hook_error must be a non-empty string or null.")
+        if not isinstance(self.hook_candidates, tuple):
+            raise ValueError("hook_candidates must be an immutable tuple.")
+        if self.hook_candidates and len(self.hook_candidates) != 3:
+            raise ValueError("hook_candidates must contain exactly three entries or be empty.")
+        normalized_candidates = [_normalized_hook_candidate(candidate) for candidate in self.hook_candidates]
+        if any(not candidate for candidate in normalized_candidates):
+            raise ValueError("hook_candidates must not contain empty strings.")
+        if len(set(normalized_candidates)) != len(normalized_candidates):
+            raise ValueError("hook_candidates must be distinct.")
+        if self.selected_hook is not None and not self.selected_hook.strip():
+            raise ValueError("selected_hook must be a non-empty string or null.")
+        if self.hook_generation_status is not None and self.hook_generation_status not in {
+            "generated",
+            "failed",
+            "rejected",
+        }:
+            raise ValueError("hook_generation_status is not supported.")
+        if self.hook_generation_error is not None and not self.hook_generation_error.strip():
+            raise ValueError("hook_generation_error must be a non-empty string or null.")
+        if self.hook_generated_at is not None and self.hook_generated_at.tzinfo is None:
+            raise ValueError("hook_generated_at must include timezone information when provided.")
+        if self.hook_model is not None and not self.hook_model.strip():
+            raise ValueError("hook_model must be a non-empty string or null.")
 
     def to_dict(self) -> dict[str, object]:
         """Serialize the record to JSON-compatible primitives."""
@@ -186,6 +221,14 @@ class ClipMetadata:
             "hook_status": self.hook_status,
             "hook_source": self.hook_source,
             "hook_error": self.hook_error,
+            "hook_candidates": list(self.hook_candidates),
+            "selected_hook": self.selected_hook,
+            "hook_generation_status": self.hook_generation_status,
+            "hook_generation_error": self.hook_generation_error,
+            "hook_generated_at": (
+                self.hook_generated_at.isoformat() if self.hook_generated_at else None
+            ),
+            "hook_model": self.hook_model,
         }
 
     @classmethod
@@ -219,6 +262,14 @@ class ClipMetadata:
             hook_status=_optional_string(data, "hook_status"),  # type: ignore[arg-type]
             hook_source=_optional_string(data, "hook_source"),  # type: ignore[arg-type]
             hook_error=_optional_string(data, "hook_error"),
+            hook_candidates=_optional_string_tuple(data, "hook_candidates"),
+            selected_hook=_optional_string(data, "selected_hook"),
+            hook_generation_status=_optional_string(
+                data, "hook_generation_status"
+            ),  # type: ignore[arg-type]
+            hook_generation_error=_optional_string(data, "hook_generation_error"),
+            hook_generated_at=_optional_datetime(data, "hook_generated_at"),
+            hook_model=_optional_string(data, "hook_model"),
         )
 
 
@@ -250,6 +301,26 @@ class DownloaderConfig:
             raise ValueError("timeout_seconds must be greater than zero.")
         if self.downloads_per_run <= 0:
             raise ValueError("downloads_per_run must be greater than zero.")
+
+
+@dataclass(frozen=True, slots=True)
+class HookGenerationConfig:
+    """Validated OpenAI hook-generation settings kept separate from rendering style."""
+
+    enabled: bool = False
+    model: str = "gpt-4o-mini"
+    maximum_characters: int = 60
+    maximum_clips_per_run: int = 10
+    automatic_selection: bool = False
+
+    def __post_init__(self) -> None:
+        """Reject unsafe queue limits and incomplete model settings before API use."""
+        if not self.model.strip():
+            raise ValueError("hook generation model must not be empty.")
+        if self.maximum_characters <= 0:
+            raise ValueError("hook generation maximum_characters must be greater than zero.")
+        if self.maximum_clips_per_run <= 0:
+            raise ValueError("hook generation maximum_clips_per_run must be greater than zero.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -426,6 +497,16 @@ def _optional_path(data: Mapping[str, object], field_name: str) -> Path | None:
     return Path(value)
 
 
+def _optional_string_tuple(data: Mapping[str, object], field_name: str) -> tuple[str, ...]:
+    """Read an optional JSON string list as immutable metadata candidates."""
+    value = data.get(field_name, [])
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{field_name} must be a list of strings or null.")
+    return tuple(value)
+
+
 def _required_datetime(data: Mapping[str, object], field_name: str) -> datetime:
     """Return a timezone-aware ISO 8601 datetime field."""
     value = _required_string(data, field_name)
@@ -436,3 +517,26 @@ def _required_datetime(data: Mapping[str, object], field_name: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError(f"{field_name} must include timezone information.")
     return parsed
+
+
+def _optional_datetime(data: Mapping[str, object], field_name: str) -> datetime | None:
+    """Read an optional timezone-aware ISO timestamp from stored JSON metadata."""
+    value = data.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be an ISO timestamp string or null.")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"{field_name} must be an ISO 8601 timestamp.") from error
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field_name} must include timezone information.")
+    return parsed
+
+
+def _normalized_hook_candidate(candidate: str) -> str:
+    """Create a stable duplicate key without altering the stored display text."""
+    if not isinstance(candidate, str):
+        return ""
+    return " ".join(candidate.split()).casefold()
