@@ -163,6 +163,7 @@ class HookSelectionAndRenderingTests(unittest.TestCase):
         self.assertEqual(stored, HookSelection("Stored manual hook", "manual"))
         self.assertEqual(selected, HookSelection("Reviewed generated hook", "generated"))
         self.assertEqual(fallback, HookSelection("A useful title", "source_title"))
+        self.assertEqual(selected.reason, "selected_hook")
 
     def test_disabled_hook_and_missing_text_return_no_selection(self) -> None:
         """No hook remains a supported formatter path when hooks are disabled or unavailable."""

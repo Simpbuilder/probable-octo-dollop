@@ -27,6 +27,7 @@ from hook_generator import (
     HookGenerationSummary,
     PendingHookGenerator,
     create_openai_hook_client,
+    inspect_hook_flow,
     load_openai_api_key,
 )
 
@@ -83,6 +84,11 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
         "--force-hooks",
         action="store_true",
         help="Regenerate candidates even when a clip already has saved hook candidates.",
+    )
+    parser.add_argument(
+        "--debug-hook-flow",
+        metavar="CLIP_ID",
+        help="Print saved hook values and the formatter choice for one clip without changing data.",
     )
     return parser.parse_args(arguments)
 
@@ -143,6 +149,46 @@ def print_hook_generation_summary(summary: HookGenerationSummary) -> None:
     print(f"Generated: {summary.generated}")
     print(f"Skipped: {summary.skipped}")
     print(f"Failed: {summary.failed}")
+
+
+def print_hook_flow_debug(
+    config: CollectorConfig,
+    clip_id: str,
+    *,
+    manual_hook: str | None = None,
+) -> int:
+    """Print one clip's persisted candidates and pure formatter resolution without side effects."""
+    if config.formatter_config is None:
+        print("Hook flow debug not started: formatter configuration is missing.")
+        return 2
+    try:
+        debug = inspect_hook_flow(
+            config.metadata_file,
+            clip_id,
+            config.formatter_config.hook,
+            manual_hook=manual_hook,
+        )
+    except (KeyError, ValueError) as error:
+        print(f"Hook flow debug not started: {error}")
+        return 2
+
+    print("Hook flow debug")
+    print(f"Metadata file: {debug.metadata_file}")
+    print(f"Clip ID: {debug.clip_id}")
+    print("Hook candidates:")
+    if debug.hook_candidates:
+        for index, candidate in enumerate(debug.hook_candidates, start=1):
+            print(f"{index}. {candidate}")
+    else:
+        print("(none)")
+    print(f"Selected hook: {debug.selected_hook if debug.selected_hook is not None else '(none)'}")
+    if debug.selection is None:
+        print("Final hook for rendering: (none)")
+        print("Reason/source: no explicit hook, selected_hook, hook_text, or enabled title fallback")
+    else:
+        print(f"Final hook for rendering: {debug.selection.text}")
+        print(f"Reason/source: {debug.selection.reason} ({debug.selection.source})")
+    return 0
 
 
 def run_manual_url_collector(config: CollectorConfig, project_root: Path) -> int:
@@ -314,6 +360,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
         print(f"Pipeline not started: {error}")
         return 2
 
+    if parsed_arguments.debug_hook_flow is not None:
+        return print_hook_flow_debug(
+            config,
+            parsed_arguments.debug_hook_flow,
+            manual_hook=parsed_arguments.hook,
+        )
+
     if parsed_arguments.generate_hooks:
         return run_pending_hook_generator(
             config,
@@ -335,7 +388,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         format_only=format_requested and not parsed_arguments.download,
     ):
         exit_code = max(exit_code, run_pending_clip_downloader(config))
-    if should_run_hook_generation(config, explicit_generation=False):
+    if not format_requested and should_run_hook_generation(config, explicit_generation=False):
         exit_code = max(exit_code, run_pending_hook_generator(config, project_root))
     if should_run_formatter(config, format_requested):
         exit_code = max(

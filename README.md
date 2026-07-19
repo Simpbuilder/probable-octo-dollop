@@ -176,10 +176,23 @@ py review_hooks.py
 ```
 
 For each clip, the reviewer displays its ID, original title, and three options.
-Enter `1`, `2`, or `3` to select a candidate; `c` to enter a custom hook; `s` to
-leave it unchanged; `r` to reject all candidates; or `all 1`, `all 2`, or
+It also prints the exact metadata file being edited. Enter `1`, `2`, or `3` to
+copy that saved candidate into `selected_hook`; the reviewer never generates,
+rewrites, or renders hooks.
+Use `c` to enter a custom hook; `s` to leave it unchanged; `r` to reject all
+candidates; or `all 1`, `all 2`, or
 `all 3` to choose one option for the remaining clips. The saved `selected_hook`
 is used by a later formatter run, but generation and review never start that run.
+
+Inspect a single stored clip's hook flow without changing metadata, generating
+hooks, or rendering video:
+
+```bash
+py run_pipeline.py --debug-hook-flow CLIP_ID
+```
+
+The command prints the metadata file, candidates, `selected_hook`, final render
+choice, and its priority reason.
 
 ### Fonts
 

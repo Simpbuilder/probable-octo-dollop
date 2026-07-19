@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import logging
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from collector.models import ClipMetadata, HookGenerationConfig
+from collector.config import load_collector_config
+from collector.models import ClipMetadata, HookConfig, HookGenerationConfig
 from collector.storage import load_all_clip_metadata, save_clip_metadata
 from hook_generator.client import HookGenerationClientError, HookGenerationCredentialsError, load_openai_api_key
+from hook_generator.diagnostics import inspect_hook_flow
 from hook_generator.generator import (
     HookGenerationResponseError,
     PendingHookGenerator,
@@ -317,7 +321,10 @@ class HookReviewTests(unittest.TestCase):
         """Numeric and custom review choices become selected_hook metadata without rendering media."""
         with TemporaryDirectory() as temporary_directory:
             metadata_file = Path(temporary_directory) / "clips.json"
-            first_clip = self.make_reviewable_clip("review-first")
+            first_clip = replace(
+                self.make_reviewable_clip("review-first"),
+                hook_candidates=("He said WHAT?", "I couldn't believe it...", "This was not the plan"),
+            )
             second_clip = self.make_reviewable_clip("review-second")
             save_clip_metadata(metadata_file, first_clip)
             save_clip_metadata(metadata_file, second_clip)
@@ -332,12 +339,51 @@ class HookReviewTests(unittest.TestCase):
             clips_by_id = {clip.unique_id: clip for clip in load_all_clip_metadata(metadata_file)}
             self.assertEqual(summary.selected, 1)
             self.assertEqual(summary.custom, 1)
-            self.assertEqual(clips_by_id[first_clip.unique_id].selected_hook, "Second option")
+            self.assertEqual(
+                clips_by_id[first_clip.unique_id].selected_hook,
+                "I couldn't believe it...",
+            )
+            self.assertEqual(
+                clips_by_id[first_clip.unique_id].hook_candidates,
+                ("He said WHAT?", "I couldn't believe it...", "This was not the plan"),
+            )
             self.assertEqual(
                 clips_by_id[second_clip.unique_id].selected_hook,
                 "A custom reaction hook",
             )
             self.assertTrue(any("Clip ID: review-first" in line for line in output))
+            self.assertTrue(any(f"Metadata file: {metadata_file.resolve()}" in line for line in output))
+            self.assertIn("1. He said WHAT?", output)
+            self.assertIn("2. I couldn't believe it...", output)
+            self.assertIn("3. This was not the plan", output)
+
+    def test_review_never_invokes_hook_generation(self) -> None:
+        """Review reads saved candidates only and never constructs a generation request."""
+        with TemporaryDirectory() as temporary_directory:
+            metadata_file = Path(temporary_directory) / "clips.json"
+            save_clip_metadata(metadata_file, self.make_reviewable_clip("review-no-generation"))
+
+            with patch("hook_generator.generator.PendingHookGenerator.run") as generate:
+                HookReviewer(
+                    metadata_file,
+                    HookGenerationConfig(maximum_characters=60),
+                ).run(input_func=lambda _: "s", output_func=lambda _: None)
+
+            generate.assert_not_called()
+
+
+class HookReviewContinuationTests(unittest.TestCase):
+    """Keep remaining review choices covered without involving generation or rendering."""
+
+    def make_reviewable_clip(self, unique_id: str) -> ClipMetadata:
+        """Create a generated candidate set ready for a reviewer decision."""
+        return replace(
+            make_clip(unique_id),
+            hook_candidates=("First option", "Second option", "Third option"),
+            hook_generation_status="generated",
+            hook_model="test-model",
+            hook_generated_at=datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc),
+        )
 
     def test_all_selection_chooses_one_candidate_for_remaining_clips(self) -> None:
         """A practical batch command applies the requested numeric option to all shown clips."""
@@ -387,3 +433,90 @@ class HookGenerationRunnerTests(unittest.TestCase):
     def test_generate_hooks_cannot_be_combined_with_formatting(self) -> None:
         """A focused generation run rejects flags that would start a media stage."""
         self.assertEqual(run_pipeline_main(["--generate-hooks", "--format"]), 2)
+
+    def test_format_run_never_starts_hook_generation(self) -> None:
+        """Formatting is isolated even when automatic hook generation is enabled in config."""
+        project_root = Path(__file__).resolve().parents[1]
+        config = load_collector_config(project_root / "config")
+        enabled_config = replace(
+            config,
+            hook_generation_config=replace(config.hook_generation_config, enabled=True),
+            formatter_config=replace(config.formatter_config, enabled=True),
+        )
+
+        with (
+            patch("run_pipeline.load_collector_config", return_value=enabled_config),
+            patch("run_pipeline.run_pending_hook_generator", return_value=0) as generator,
+            patch("run_pipeline.run_pending_clip_formatter", return_value=0) as formatter,
+        ):
+            self.assertEqual(run_pipeline_main(["--format"]), 0)
+
+        generator.assert_not_called()
+        formatter.assert_called_once()
+
+    def test_debug_hook_flow_prints_exact_configured_record_without_generation(self) -> None:
+        """The diagnostic exposes one saved clip's values without running a pipeline stage."""
+        with TemporaryDirectory() as temporary_directory:
+            metadata_file = Path(temporary_directory) / "metadata" / "clips.json"
+            clip = replace(
+                make_clip("debug-clip"),
+                hook_candidates=("First saved hook", "Second saved hook", "Third saved hook"),
+                selected_hook="Second saved hook",
+            )
+            save_clip_metadata(metadata_file, clip)
+            project_root = Path(__file__).resolve().parents[1]
+            config = load_collector_config(project_root / "config")
+            debug_config = replace(
+                config,
+                metadata_file=metadata_file,
+                formatter_config=replace(config.formatter_config, hook=HookConfig(enabled=True)),
+            )
+            output = StringIO()
+
+            with (
+                patch("run_pipeline.load_collector_config", return_value=debug_config),
+                patch("run_pipeline.run_pending_hook_generator", return_value=0) as generator,
+                redirect_stdout(output),
+            ):
+                self.assertEqual(run_pipeline_main(["--debug-hook-flow", "debug-clip"]), 0)
+
+            generator.assert_not_called()
+            rendered_output = output.getvalue()
+            self.assertIn(f"Metadata file: {metadata_file.resolve()}", rendered_output)
+            self.assertIn("Clip ID: debug-clip", rendered_output)
+            self.assertIn("1. First saved hook", rendered_output)
+            self.assertIn("Selected hook: Second saved hook", rendered_output)
+            self.assertIn("Final hook for rendering: Second saved hook", rendered_output)
+            self.assertIn("Reason/source: selected_hook (generated)", rendered_output)
+
+
+class HookFlowDiagnosticsTests(unittest.TestCase):
+    """Verify diagnostics use one exact metadata store and the shared formatter resolver."""
+
+    def test_diagnostic_does_not_load_stale_or_unrelated_metadata(self) -> None:
+        """A same-ID record in another JSON file cannot affect the inspected clip flow."""
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            configured_metadata = root / "metadata" / "clips.json"
+            stale_metadata = root / "old-metadata" / "clips.json"
+            configured_clip = replace(
+                make_clip("same-id"),
+                hook_candidates=("Configured first", "Configured second", "Configured third"),
+                selected_hook="Configured second",
+            )
+            stale_clip = replace(
+                make_clip("same-id"),
+                hook_candidates=("Stale first", "Stale second", "Stale third"),
+                selected_hook="Stale second",
+            )
+            save_clip_metadata(configured_metadata, configured_clip)
+            save_clip_metadata(stale_metadata, stale_clip)
+
+            debug = inspect_hook_flow(configured_metadata, "same-id", HookConfig(enabled=True))
+
+            self.assertEqual(debug.metadata_file, configured_metadata.resolve())
+            self.assertEqual(debug.hook_candidates, configured_clip.hook_candidates)
+            self.assertEqual(debug.selected_hook, "Configured second")
+            self.assertIsNotNone(debug.selection)
+            self.assertEqual(debug.selection.text, "Configured second")
+            self.assertEqual(debug.selection.reason, "selected_hook")

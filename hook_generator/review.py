@@ -93,6 +93,7 @@ class HookReviewer:
     def _show_clip(self, clip: ClipMetadata, output_func: Callable[[str], None]) -> None:
         """Display only the metadata a reviewer needs to make a lightweight choice."""
         output_func(f"\nClip ID: {clip.unique_id}")
+        output_func(f"Metadata file: {self._metadata_file.resolve()}")
         output_func(f"Original title: {clip.title}")
         for index, candidate in enumerate(clip.hook_candidates, start=1):
             output_func(f"{index}. {candidate}")

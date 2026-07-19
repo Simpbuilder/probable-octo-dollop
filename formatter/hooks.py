@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import platform
@@ -32,6 +32,7 @@ class HookSelection:
 
     text: str
     source: HookSource
+    reason: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,22 +199,26 @@ def resolve_hook_selection(
     if manual_hook is not None:
         normalized_manual_hook = normalize_hook_text(manual_hook)
         if normalized_manual_hook:
-            return HookSelection(normalized_manual_hook, "manual")
+            return HookSelection(normalized_manual_hook, "manual", "explicit CLI hook")
         return None
     if not config.enabled:
         return None
     if clip.selected_hook is not None:
         normalized_selected_hook = normalize_hook_text(clip.selected_hook)
         if normalized_selected_hook:
-            return HookSelection(normalized_selected_hook, "generated")
+            return HookSelection(normalized_selected_hook, "generated", "selected_hook")
     if clip.hook_text is not None:
         normalized_hook_text = normalize_hook_text(clip.hook_text)
         if normalized_hook_text:
-            return HookSelection(normalized_hook_text, clip.hook_source or "manual")
+            return HookSelection(
+                normalized_hook_text,
+                clip.hook_source or "manual",
+                "existing hook_text",
+            )
     if config.fallback_to_source_title:
         normalized_title = normalize_hook_text(clip.title)
         if normalized_title:
-            return HookSelection(normalized_title, "source_title")
+            return HookSelection(normalized_title, "source_title", "source title fallback")
     return None
 
 

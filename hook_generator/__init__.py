@@ -13,6 +13,7 @@ from .generator import (
     PendingHookGenerator,
     parse_hook_candidates,
 )
+from .diagnostics import HookFlowDebug, inspect_hook_flow
 from .review import HookReviewSummary, HookReviewer
 
 __all__ = [
@@ -22,9 +23,11 @@ __all__ = [
     "HookGenerationDependencyError",
     "HookGenerationResponseError",
     "HookGenerationSummary",
+    "HookFlowDebug",
     "HookReviewSummary",
     "HookReviewer",
     "load_openai_api_key",
+    "inspect_hook_flow",
     "parse_hook_candidates",
     "PendingHookGenerator",
 ]

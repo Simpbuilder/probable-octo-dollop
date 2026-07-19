@@ -35,6 +35,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         print("Hook review not started: hook generation configuration is missing.")
         return 2
 
+    print(f"Metadata file: {config.metadata_file.resolve()}")
     summary = HookReviewer(config.metadata_file, config.hook_generation_config).run()
     print("Hook review")
     print(f"Available: {summary.available}")
