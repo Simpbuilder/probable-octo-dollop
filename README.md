@@ -1,39 +1,66 @@
 # Viral Clip Pipeline
 
-This repository is a standalone Python pipeline for finding funny video clips,
-preparing them for Instagram Reels, and eventually helping queue or post them.
-It remains separate from the `ai-video-poster` project.
+This repository is a standalone Python pipeline for collecting funny video
+clips and preparing them for a future Instagram Reels workflow. It remains
+separate from the `ai-video-poster` project.
 
-## Current Collector
+## Collection Modes
 
-The first working source is Reddit. It uses PRAW and Reddit's official API to
-inspect configured subreddits, filter suitable Reddit-hosted video posts, and
-save their metadata in `metadata/clips.json`. It does not download video files.
+`config/collector.json` selects which collector runs through `pipeline_mode`:
 
-The collector is deliberately split into focused modules:
+- `manual_urls`: import URLs from `input_urls.txt` without Reddit API access.
+- `reddit_api`: run the existing PRAW Reddit metadata collector.
+- `both`: run manual URL intake first, then the Reddit API collector.
 
-- `collector.reddit_client` loads credentials and communicates with PRAW.
-- `collector.reddit_filter` applies post eligibility rules.
-- `collector.reddit_metadata` creates `ClipMetadata` records.
-- `collector.storage` persists JSON metadata and prevents duplicates.
-- `collector.collector` coordinates a run and returns a summary.
+The checked-in configuration defaults to `manual_urls` so work can continue
+while Reddit Data API approval is pending. Change it to `reddit_api` or `both`
+when credentials and approval are available.
 
-## Installation
+## Manual URL Intake
 
-Install the required packages in your Python virtual environment:
+Add one public HTTP or HTTPS URL per line in `input_urls.txt`. The queue also
+supports blank lines and comments beginning with `#`:
+
+```text
+# A note for the next intake run
+https://www.reddit.com/r/funny/comments/example_post/
+
+https://example.com/another-public-url
+```
+
+URLs are normalized for stable duplicate detection while the original pasted
+URL is preserved in clip metadata. Reddit domains are detected and their
+subreddit is recorded when it is present in the URL. Valid non-Reddit URLs are
+also accepted for future source support.
+
+After an accepted URL, or a URL already represented in metadata, the queue
+entry is removed from `input_urls.txt` and appended to
+`metadata/processed_urls.txt`. Invalid URLs and URLs that fail to save remain
+in `input_urls.txt` for correction or retry. The processed log is local runtime
+data and is ignored by Git.
+
+Manual intake creates metadata only. It does not fetch pages, resolve media,
+or download any video files.
+
+## Reddit API Collector
+
+The existing Reddit collector uses PRAW and Reddit's official API to inspect
+configured subreddits, filter Reddit-hosted video posts, and save their
+metadata in `metadata/clips.json`.
+
+Install dependencies in your Python virtual environment:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Create a local credentials file from the safe template:
+For `reddit_api` or `both` mode, create a local credentials file:
 
 ```bash
 copy .env.example .env
 ```
 
-On macOS or Linux, use `cp .env.example .env` instead. Edit `.env` with the
-three credentials for a Reddit application:
+On macOS or Linux, use `cp .env.example .env`. Set these values in `.env`:
 
 ```text
 REDDIT_CLIENT_ID=
@@ -41,14 +68,11 @@ REDDIT_CLIENT_SECRET=
 REDDIT_USER_AGENT=
 ```
 
-Register a Reddit application to obtain the client ID and client secret. The
-user agent should uniquely identify this project, for example
-`script:viral-clip-pipeline:0.1 (by u/your_reddit_username)`. The `.env` file
-is ignored by Git; never commit real credentials.
+The `.env` file is ignored by Git and must never contain committed credentials.
 
 ## Configuration
 
-Edit `config/sources.json` to configure the Reddit collector:
+Edit `config/sources.json` for Reddit-specific collection rules:
 
 - `subreddits`: subreddit names to inspect.
 - `minimum_score`: minimum Reddit score to accept.
@@ -59,8 +83,8 @@ Edit `config/sources.json` to configure the Reddit collector:
 - `posts_to_inspect`: maximum submissions inspected per subreddit.
 - `allow_nsfw`: set to `true` only when NSFW posts should be considered.
 
-`config/collector.json` controls local workflow folders and the JSON metadata
-file location.
+`config/collector.json` also controls local workflow folders, metadata storage,
+and the active `pipeline_mode`.
 
 ## Run
 
@@ -68,11 +92,11 @@ file location.
 python run_pipeline.py
 ```
 
-Each run prints a summary of checked subreddits, inspected posts, accepted
-metadata, duplicates, filtered posts, and recoverable errors. A missing or
-invalid subreddit does not stop other configured subreddits from being checked.
+Each active collector prints a concise summary. The manual queue runs without
+credentials; the Reddit collector reports a clear setup message if credentials
+are unavailable.
 
 ## Not Yet Implemented
 
-Videos are not downloaded or processed yet. There is no FFmpeg integration,
+No media is downloaded or processed yet. There is no FFmpeg integration,
 formatting, captions, hooks, AI analysis, queueing, or Instagram posting.

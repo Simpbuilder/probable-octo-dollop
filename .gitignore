@@ -21,6 +21,7 @@ logs/*
 
 # Generated metadata
 metadata/*.json
+metadata/processed_urls.txt
 !metadata/.gitkeep
 
 # Downloaded and generated video files

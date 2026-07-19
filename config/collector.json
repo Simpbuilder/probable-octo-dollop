@@ -1,4 +1,5 @@
 {
+  "pipeline_mode": "manual_urls",
   "output_folders": {
     "pending": "clips/pending",
     "approved": "clips/approved",

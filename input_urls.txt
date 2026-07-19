@@ -1,0 +1,2 @@
+# Paste one public Reddit post URL per line.
+# Blank lines and lines beginning with # are ignored.

@@ -10,6 +10,7 @@ from typing import Literal, Mapping
 
 DownloadStatus = Literal["pending", "downloaded", "failed"]
 ProcessingStatus = Literal["pending", "approved", "rejected", "ready", "posted"]
+PipelineMode = Literal["reddit_api", "manual_urls", "both"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +55,7 @@ class CollectorConfig:
     source_configs: Mapping[str, SourceConfig]
     output_folders: Mapping[str, Path]
     metadata_file: Path
+    pipeline_mode: PipelineMode = "reddit_api"
 
     @property
     def enabled_sources(self) -> tuple[str, ...]:
@@ -84,7 +86,7 @@ class ClipMetadata:
     score: int
     comment_count: int
     created_at: datetime
-    media_url: str
+    media_url: str | None
     local_file_path: Path | None
     duration_seconds: float | None = None
     width: int | None = None
@@ -102,7 +104,6 @@ class ClipMetadata:
             "source_url": self.source_url,
             "title": self.title,
             "author": self.author,
-            "media_url": self.media_url,
         }
         empty_fields = [name for name, value in required_fields.items() if not value.strip()]
         if empty_fields:
@@ -159,7 +160,7 @@ class ClipMetadata:
             score=_required_int(data, "score"),
             comment_count=_required_int(data, "comment_count"),
             created_at=_required_datetime(data, "created_at"),
-            media_url=_required_string(data, "media_url"),
+            media_url=_optional_string(data, "media_url"),
             local_file_path=_optional_path(data, "local_file_path"),
             duration_seconds=_optional_float(data, "duration_seconds"),
             width=_optional_int(data, "width"),

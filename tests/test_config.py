@@ -24,6 +24,7 @@ class CollectorConfigTests(unittest.TestCase):
         self.assertEqual(config.source_configs["reddit"].minimum_score, 500)
         self.assertEqual(config.output_path("pending"), PROJECT_ROOT / "clips" / "pending")
         self.assertEqual(config.metadata_file, PROJECT_ROOT / "metadata" / "clips.json")
+        self.assertEqual(config.pipeline_mode, "manual_urls")
 
     def test_rejects_enabled_reddit_without_subreddits(self) -> None:
         """Validation catches a missing Reddit target list before a run starts."""

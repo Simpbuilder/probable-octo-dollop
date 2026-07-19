@@ -6,12 +6,13 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from .models import CollectorConfig, SourceConfig
+from .models import CollectorConfig, PipelineMode, SourceConfig
 
 
 REQUIRED_OUTPUT_FOLDERS = frozenset({"pending", "approved", "rejected", "ready", "posted", "metadata"})
 REDDIT_SORTING_MODES = frozenset({"hot", "new", "top"})
 REDDIT_TOP_TIME_FILTERS = frozenset({"day", "week", "month", "year", "all"})
+PIPELINE_MODES = frozenset({"reddit_api", "manual_urls", "both"})
 
 
 class ConfigurationError(ValueError):
@@ -34,11 +35,15 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
     metadata_file = _resolve_path(
         _required_string(collector_data, "metadata_file", "collector.json"), project_root
     )
+    pipeline_mode = _optional_string(
+        collector_data, "pipeline_mode", "collector.json", default="reddit_api"
+    )
 
     config = CollectorConfig(
         source_configs=source_configs,
         output_folders=output_folders,
         metadata_file=metadata_file,
+        pipeline_mode=pipeline_mode,  # type: ignore[arg-type]
     )
     _validate_collector_config(config)
     return config
@@ -115,6 +120,9 @@ def _validate_collector_config(config: CollectorConfig) -> None:
     """Apply cross-file validation after both configuration files are loaded."""
     if not config.enabled_sources:
         raise ConfigurationError("At least one source must be enabled.")
+    if config.pipeline_mode not in PIPELINE_MODES:
+        allowed_modes = ", ".join(sorted(PIPELINE_MODES))
+        raise ConfigurationError(f"pipeline_mode must be one of: {allowed_modes}.")
     reddit_config = config.source_configs.get("reddit")
     if reddit_config and reddit_config.enabled and not reddit_config.subreddits:
         raise ConfigurationError("An enabled Reddit source requires at least one subreddit.")
