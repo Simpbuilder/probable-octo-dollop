@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import importlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import shutil
@@ -12,6 +13,7 @@ from unittest.mock import patch
 from collector import load_collector_config
 from publisher.history import append_post_history, build_post_history_record
 from ui_helpers import (
+    InstagramOverview,
     UiConfigurationValues,
     append_unique_urls,
     load_instagram_overview,
@@ -36,6 +38,24 @@ class UiHelperTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.arguments, ("--format", "--all"))
         pipeline_main.assert_called_once_with(("--format", "--all"))
+
+    def test_instagram_overview_is_public_and_app_imports_without_annotation_only_types(self) -> None:
+        """The Streamlit entry point can import the public summary model without a runtime type dependency."""
+        overview = InstagramOverview(
+            account_username="creator",
+            publish_mode="draft",
+            fixed_caption="Caption",
+            pending_uploads=2,
+            history_total=3,
+            drafts=1,
+            published=2,
+        )
+
+        app = importlib.import_module("app")
+
+        self.assertEqual(overview.account_username, "creator")
+        self.assertTrue(callable(app.main))
+        self.assertNotIn("InstagramOverview", app.__dict__)
 
     def test_manual_import_delegates_to_existing_runner_function(self) -> None:
         """The URL import UI helper calls the runner's manual collector rather than parsing metadata itself."""

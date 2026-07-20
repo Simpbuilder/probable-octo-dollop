@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import streamlit as st
 
@@ -12,9 +12,6 @@ from cleanup import print_cleanup_plan
 from collector import ConfigurationError, load_collector_config
 from collector.models import CollectorConfig
 from ui_helpers import (
-    DashboardCounts,
-    InstagramOverview,
-    PipelineProgress,
     UiConfigurationValues,
     append_unique_urls,
     load_dashboard_counts,
@@ -34,6 +31,9 @@ from ui_helpers import (
     save_ui_configuration,
     select_review_candidate,
 )
+
+if TYPE_CHECKING:
+    from ui_helpers import DashboardCounts, InstagramOverview, PipelineProgress
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
