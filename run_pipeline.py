@@ -37,6 +37,7 @@ from publisher import (
     create_zernio_client,
     load_zernio_api_key,
 )
+from cleanup import run_cleanup_command
 
 from collector import (
     CollectionSummary,
@@ -121,6 +122,31 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
         "--publish-now",
         action="store_true",
         help="Publish an explicit Instagram upload immediately instead of creating a draft.",
+    )
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="Remove only clearly temporary pipeline files.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview cleanup operations without changing files.",
+    )
+    parser.add_argument(
+        "--all-temporary",
+        action="store_true",
+        help="With --cleanup, also remove regeneratable pending and ready media after confirmation.",
+    )
+    parser.add_argument(
+        "--reset-project",
+        action="store_true",
+        help="Reset a batch after typing RESET; preserves credentials, config, uploads, and posted videos.",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the YES prompt for --cleanup --all-temporary. It never bypasses RESET.",
     )
     return parser.parse_args(arguments)
 
@@ -464,10 +490,45 @@ def run_instagram_uploader(
     return 1 if summary.failed else 0
 
 
+def _has_pipeline_stage_arguments(arguments: argparse.Namespace) -> bool:
+    """Return whether cleanup was combined with another command that changes pipeline state."""
+    return any(
+        (
+            arguments.download,
+            arguments.format,
+            arguments.format_one,
+            arguments.generate_hooks,
+            arguments.debug_hook_flow is not None,
+            arguments.list_zernio_accounts,
+            arguments.upload_instagram,
+            arguments.upload_one_instagram,
+            arguments.publish_now,
+        )
+    )
+
+
 def main(arguments: Sequence[str] | None = None) -> int:
     """Load configuration and run the requested collection, download, and formatting stages."""
     configure_logging()
     parsed_arguments = parse_arguments(arguments)
+    cleanup_requested = parsed_arguments.cleanup or parsed_arguments.reset_project
+    if parsed_arguments.all_temporary and not parsed_arguments.cleanup:
+        print("Pipeline not started: --all-temporary requires --cleanup.")
+        return 2
+    if parsed_arguments.dry_run and not cleanup_requested:
+        print("Pipeline not started: --dry-run requires --cleanup or --reset-project.")
+        return 2
+    if parsed_arguments.yes and not parsed_arguments.all_temporary:
+        print("Pipeline not started: --yes requires --cleanup --all-temporary.")
+        return 2
+    if parsed_arguments.reset_project and (
+        parsed_arguments.cleanup or parsed_arguments.all_temporary or parsed_arguments.yes
+    ):
+        print("Pipeline not started: --reset-project cannot be combined with cleanup flags.")
+        return 2
+    if cleanup_requested and _has_pipeline_stage_arguments(parsed_arguments):
+        print("Pipeline not started: cleanup commands must run separately from pipeline stages.")
+        return 2
     if parsed_arguments.hook is not None and not parsed_arguments.format_one:
         print("Pipeline not started: --hook requires --format-one.")
         return 2
@@ -505,6 +566,14 @@ def main(arguments: Sequence[str] | None = None) -> int:
         print("Pipeline not started: Zernio commands must run separately from collection stages.")
         return 2
     project_root = Path(__file__).resolve().parent
+    if cleanup_requested:
+        return run_cleanup_command(
+            project_root,
+            all_temporary=parsed_arguments.all_temporary,
+            reset_project=parsed_arguments.reset_project,
+            dry_run=parsed_arguments.dry_run,
+            yes=parsed_arguments.yes,
+        )
     try:
         config = load_collector_config(project_root / "config")
     except ConfigurationError as error:

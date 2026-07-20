@@ -4,3 +4,4 @@ yt-dlp
 Pillow
 openai
 requests
+streamlit

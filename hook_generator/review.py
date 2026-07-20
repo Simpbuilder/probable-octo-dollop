@@ -73,16 +73,7 @@ class HookReviewer:
             elif choice == "s":
                 summary.skipped += 1
             elif choice == "r":
-                update_clip_metadata(
-                    self._metadata_file,
-                    replace(
-                        clip,
-                        hook_candidates=(),
-                        selected_hook=None,
-                        hook_generation_status="rejected",
-                        hook_generation_error=None,
-                    ),
-                )
+                reject_hook_candidates(self._metadata_file, clip)
                 summary.rejected += 1
             else:
                 output_func("Enter 1, 2, 3, c, s, r, or all 1, all 2, all 3.")
@@ -100,22 +91,52 @@ class HookReviewer:
 
     def _select_candidate(self, clip: ClipMetadata, candidate_index: int) -> None:
         """Persist one generated candidate as the later formatter selection."""
-        update_clip_metadata(
-            self._metadata_file,
-            replace(
-                clip,
-                selected_hook=clip.hook_candidates[candidate_index],
-                hook_generation_error=None,
-            ),
-        )
+        select_hook_candidate(self._metadata_file, clip, candidate_index)
 
     def _save_custom_hook(self, clip: ClipMetadata, custom_hook: str) -> None:
         """Persist reviewer-entered hook text without discarding generated candidates."""
-        update_clip_metadata(
-            self._metadata_file,
-            replace(
-                clip,
-                selected_hook=custom_hook,
-                hook_generation_error=None,
-            ),
-        )
+        save_custom_hook(self._metadata_file, clip, custom_hook)
+
+
+def select_hook_candidate(
+    metadata_file: Path,
+    clip: ClipMetadata,
+    candidate_index: int,
+) -> None:
+    """Save one exact stored candidate for a UI or terminal reviewer without regeneration."""
+    if candidate_index not in range(len(clip.hook_candidates)):
+        raise ValueError("Hook candidate selection is outside the saved candidate list.")
+    update_clip_metadata(
+        metadata_file,
+        replace(
+            clip,
+            selected_hook=clip.hook_candidates[candidate_index],
+            hook_generation_error=None,
+        ),
+    )
+
+
+def save_custom_hook(metadata_file: Path, clip: ClipMetadata, custom_hook: str) -> None:
+    """Persist an already validated custom hook while retaining generated candidates."""
+    update_clip_metadata(
+        metadata_file,
+        replace(
+            clip,
+            selected_hook=custom_hook,
+            hook_generation_error=None,
+        ),
+    )
+
+
+def reject_hook_candidates(metadata_file: Path, clip: ClipMetadata) -> None:
+    """Clear rejected candidates so a later explicit generation run can retry the clip."""
+    update_clip_metadata(
+        metadata_file,
+        replace(
+            clip,
+            hook_candidates=(),
+            selected_hook=None,
+            hook_generation_status="rejected",
+            hook_generation_error=None,
+        ),
+    )

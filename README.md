@@ -15,7 +15,8 @@ pip install -r requirements.txt
 
 This installs PRAW, `python-dotenv`, `yt-dlp`, Pillow for local hook-text overlays,
 the OpenAI SDK for optional hook-candidate generation, and `requests` for the
-explicit Zernio upload client.
+explicit Zernio upload client. It also installs Streamlit for the optional local
+control UI.
 
 ### FFmpeg
 
@@ -300,6 +301,72 @@ By default, a successful upload leaves the hooked MP4 in place. Set
 The two settings cannot be enabled together. Upload failures leave the local
 video and do not stop later eligible files; retry the same explicit command
 after correcting the reported issue.
+
+## Local UI
+
+Start the local Streamlit UI with:
+
+```bash
+py -m streamlit run app.py
+```
+
+On Windows, double-click `start_ui.bat` to run the same command from the project
+directory. The UI is local only and reuses the existing collectors, downloader,
+hook generator, formatter, uploader, storage, and cleanup modules.
+
+Its Dashboard shows queue counts, stored failures, ready hooked videos, upload
+history counts, and whether FFmpeg, ffprobe, and the two API keys are available;
+key values are never displayed. Add URLs accepts one URL per line and preserves
+the current queue's comments and valid existing entries. Pipeline controls run
+the established stages, while publish-now controls remain disabled until their
+explicit confirmation checkbox is selected.
+
+Hook Review shows only saved candidates and writes selections through the same
+metadata actions as `review_hooks.py`; it never generates or renders a hook.
+The Videos tab plays local `clips/ready/hooked/` files and displays each saved
+hook, processing status, and upload status. Configuration exposes only common
+queue limits, hook auto-selection, and Instagram posting settings, and validates
+the complete configuration before saving.
+
+## Cleanup And Reset
+
+Every cleanup command prints its exact plan before it deletes anything. Safe
+cleanup is limited to cache directories, partial downloads, temporary metadata
+files, temporary hook/FFmpeg artifacts, and zero-byte failed outputs:
+
+```bash
+py run_pipeline.py --cleanup
+py run_pipeline.py --cleanup --dry-run
+```
+
+Use broad temporary cleanup only when pending downloads and ready renders can be
+regenerated. It removes media in `clips/pending/`, `clips/ready/plain/`, and
+`clips/ready/hooked/`, then resets matching metadata so deleted downloads become
+pending and deleted ready renders become format-ready again:
+
+```bash
+py run_pipeline.py --cleanup --all-temporary
+py run_pipeline.py --cleanup --all-temporary --yes
+```
+
+Without `--yes`, the broad cleanup asks for `YES`. The UI always previews this
+scope and requires a confirmation checkbox.
+
+For a fresh batch, use the destructive reset:
+
+```bash
+py run_pipeline.py --reset-project
+```
+
+It clears pending, approved, rejected, and ready regeneratable files, temporary
+logs, `metadata/clips.json`, and the local `input_urls.txt` queue. It requires
+typing `RESET` exactly; `--yes` can never bypass this. The UI requires the same
+exact text before reset execution.
+
+All cleanup levels preserve `.env`, every `config/` file, source code, Git data,
+`metadata/processed_urls.txt`, `metadata/zernio_post_history.json`, and
+`clips/posted/`. Default cleanup also preserves downloaded clips and formatted
+ready videos. No cleanup action creates uploads or publishes to Instagram.
 
 ## Run
 

@@ -14,7 +14,13 @@ from .generator import (
     parse_hook_candidates,
 )
 from .diagnostics import HookFlowDebug, inspect_hook_flow
-from .review import HookReviewSummary, HookReviewer
+from .review import (
+    HookReviewSummary,
+    HookReviewer,
+    reject_hook_candidates,
+    save_custom_hook,
+    select_hook_candidate,
+)
 
 __all__ = [
     "create_openai_hook_client",
@@ -30,4 +36,7 @@ __all__ = [
     "inspect_hook_flow",
     "parse_hook_candidates",
     "PendingHookGenerator",
+    "reject_hook_candidates",
+    "save_custom_hook",
+    "select_hook_candidate",
 ]
