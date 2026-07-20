@@ -47,6 +47,9 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
     pipeline_mode = _optional_string(
         collector_data, "pipeline_mode", "collector.json", default="reddit_api"
     )
+    manual_urls_per_run = _optional_positive_int(
+        collector_data, "manual_urls_per_run", "collector.json", default=50
+    )
     downloader_config = _parse_downloader_config(collector_data, project_root)
     formatter_config = _parse_formatter_config(
         _load_optional_json_object(config_directory / "formatter.json"), project_root
@@ -63,6 +66,7 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
         downloader_config=downloader_config,
         formatter_config=formatter_config,
         hook_generation_config=hook_generation_config,
+        manual_urls_per_run=manual_urls_per_run,
     )
     _validate_collector_config(config)
     return config
@@ -171,7 +175,7 @@ def _parse_downloader_config(data: Mapping[str, Any], project_root: Path) -> Dow
             ),
             overwrite=_optional_bool(raw_config, "overwrite", "downloader", default=False),
             downloads_per_run=_optional_positive_int(
-                raw_config, "downloads_per_run", "downloader", default=5
+                raw_config, "downloads_per_run", "downloader", default=50
             ),
             enabled=_optional_bool(raw_config, "enabled", "downloader", default=False),
         )

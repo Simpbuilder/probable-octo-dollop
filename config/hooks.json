@@ -2,7 +2,7 @@
   "enabled": false,
   "model": "gpt-4o-mini",
   "maximum_characters": 60,
-  "maximum_clips_per_run": 10,
+  "maximum_clips_per_run": 50,
   "automatic_selection": false,
   "blocked_phrases": [
     "what happens next",

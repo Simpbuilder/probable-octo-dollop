@@ -32,6 +32,9 @@ class HookGenerationSummary:
     generated: int = 0
     skipped: int = 0
     failed: int = 0
+    eligible: int = 0
+    processing: int = 0
+    remaining: int = 0
 
 
 class PendingHookGenerator:
@@ -51,7 +54,7 @@ class PendingHookGenerator:
         self._client = client
         self._logger = logger or logging.getLogger(__name__)
 
-    def run(self, *, force: bool = False) -> HookGenerationSummary:
+    def run(self, *, force: bool = False, process_all: bool = False) -> HookGenerationSummary:
         """Generate candidates while keeping each failure retryable and isolated."""
         summary = HookGenerationSummary()
         try:
@@ -71,7 +74,12 @@ class PendingHookGenerator:
             eligible_clips.append(clip)
 
         summary.pending = len(eligible_clips)
-        for clip in eligible_clips[: self._config.maximum_clips_per_run]:
+        summary.eligible = len(eligible_clips)
+        summary.processing = len(eligible_clips) if process_all else min(
+            len(eligible_clips), self._config.maximum_clips_per_run
+        )
+        summary.remaining = summary.eligible - summary.processing
+        for clip in eligible_clips[: summary.processing]:
             self._generate_for_clip(clip, summary)
         return summary
 

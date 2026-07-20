@@ -13,9 +13,11 @@ from unittest.mock import patch
 from collector.manual_url_collector import ManualUrlCollector, normalize_manual_url
 from collector.models import CollectorConfig, DownloaderConfig, FormatterConfig
 from collector.storage import load_all_clip_metadata
+from downloader.models import DownloadSummary
 from run_pipeline import (
     main,
     parse_arguments,
+    print_download_summary,
     selected_collectors,
     should_run_collectors,
     should_run_downloader,
@@ -30,7 +32,7 @@ NOW = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
 class ManualUrlCollectorTests(unittest.TestCase):
     """Verify manual queue URLs are stored safely without downloading media."""
 
-    def make_collector(self, contents: str):
+    def make_collector(self, contents: str, *, maximum_urls_per_run: int = 50):
         """Create a temporary queue, processed log, and metadata store for a test."""
         temporary_directory = TemporaryDirectory()
         self.addCleanup(temporary_directory.cleanup)
@@ -42,6 +44,7 @@ class ManualUrlCollectorTests(unittest.TestCase):
                 input_file=input_file,
                 processed_file=root / "metadata" / "processed_urls.txt",
                 metadata_file=root / "metadata" / "clips.json",
+                maximum_urls_per_run=maximum_urls_per_run,
                 clock=lambda: NOW,
             ),
             input_file,
@@ -126,6 +129,30 @@ class ManualUrlCollectorTests(unittest.TestCase):
         self.assertEqual(input_file.read_text(encoding="utf-8"), f"{url}\n")
         self.assertFalse(processed_file.exists())
 
+    def test_configured_limit_defers_manual_urls_and_all_processes_the_full_queue(self) -> None:
+        """Manual intake keeps unattempted URLs queued unless an explicit full pass is requested."""
+        urls = "\n".join(f"https://example.com/video-{index}" for index in range(3)) + "\n"
+        collector, input_file, _, metadata_file = self.make_collector(urls, maximum_urls_per_run=2)
+
+        limited_summary = collector.collect()
+
+        self.assertEqual((limited_summary.eligible, limited_summary.processing, limited_summary.remaining), (3, 2, 1))
+        self.assertEqual(len(load_all_clip_metadata(metadata_file)), 2)
+        self.assertEqual(input_file.read_text(encoding="utf-8"), "https://example.com/video-2\n")
+
+        full_summary = collector.collect(process_all=True)
+
+        self.assertEqual((full_summary.eligible, full_summary.processing, full_summary.remaining), (1, 1, 0))
+        self.assertEqual(len(load_all_clip_metadata(metadata_file)), 3)
+
+    def test_empty_manual_queue_has_no_deferred_work(self) -> None:
+        """Comments and blank lines do not create queue work or a misleading limit notice."""
+        collector, _, _, _ = self.make_collector("# nothing queued\n\n")
+
+        summary = collector.collect(process_all=True)
+
+        self.assertEqual((summary.urls_found, summary.eligible, summary.processing, summary.remaining), (0, 0, 0, 0))
+
 
 class PipelineModeTests(unittest.TestCase):
     """Verify pipeline modes select the intended collector combinations."""
@@ -135,6 +162,20 @@ class PipelineModeTests(unittest.TestCase):
         self.assertEqual(selected_collectors("manual_urls"), ("manual_urls",))
         self.assertEqual(selected_collectors("reddit_api"), ("reddit_api",))
         self.assertEqual(selected_collectors("both"), ("manual_urls", "reddit_api"))
+
+    def test_limited_queue_output_explains_how_to_process_remaining_items(self) -> None:
+        """A deferred queue reports its selected and remaining work with the full-pass command."""
+        output = StringIO()
+
+        with redirect_stdout(output):
+            print_download_summary(
+                DownloadSummary(pending=23, eligible=23, processing=5, remaining=18)
+            )
+
+        self.assertIn("Eligible: 23", output.getvalue())
+        self.assertIn("Processing: 5", output.getvalue())
+        self.assertIn("Remaining: 18", output.getvalue())
+        self.assertIn("Run again or use --all", output.getvalue())
 
     def test_downloader_requires_explicit_opt_in_when_disabled(self) -> None:
         """Normal manual intake does not download URLs unless enabled or flagged."""
@@ -183,6 +224,7 @@ class PipelineModeTests(unittest.TestCase):
         )
         self.assertTrue(parse_arguments(["--download", "--format"]).download)
         self.assertTrue(parse_arguments(["--download", "--format"]).format)
+        self.assertTrue(parse_arguments(["--download", "--all"]).all)
         self.assertFalse(should_run_collectors(explicit_download=False, explicit_format=True))
         self.assertTrue(should_run_collectors(explicit_download=True, explicit_format=True))
         self.assertFalse(

@@ -69,6 +69,9 @@ removed from `input_urls.txt` and appended to `metadata/processed_urls.txt`.
 Invalid URLs and URLs that fail to save remain in the input queue for correction
 or retry. The processed log is local runtime data and is ignored by Git.
 
+Manual intake uses `manual_urls_per_run` in `config/collector.json`, with a
+default of 50 URLs per run.
+
 ## Pending Clip Downloader
 
 The downloader processes metadata records whose `download_status` is `pending`.
@@ -97,7 +100,7 @@ The `downloader` block in `config/collector.json` controls:
 - `maximum_file_size_bytes`: yt-dlp file-size safety limit.
 - `retries` and `timeout_seconds`: network behavior.
 - `overwrite`: explicit opt-in to replace a matching target file.
-- `downloads_per_run`: maximum pending records attempted in one run.
+- `downloads_per_run`: maximum pending records attempted in one run; defaults to 50.
 - `enabled`: automatic download control; it is `false` by default.
 
 ## Vertical Reel Formatter
@@ -168,6 +171,10 @@ casual English captions that prefer two to seven words and never exceed nine.
 The configured blocked phrases prevent generic clickbait; a blocked response is
 retried once with the same source metadata. API failures are recorded on the
 clip as retryable metadata errors and do not stop later clips.
+
+`maximum_clips_per_run` defaults to 50 in both `config/hooks.json` and
+`config/formatter.json`. The same 50-item default applies to downloader and
+manual-intake queues.
 
 Review candidates locally before formatting with:
 
@@ -259,6 +266,21 @@ vertical outputs in one explicit pass:
 ```bash
 python run_pipeline.py --download --format
 ```
+
+Each queue normally respects its configured safety limit. When additional work
+remains, the stage prints its eligible, processing, and remaining counts. Use
+`--all` to process every currently eligible item for any enabled stage:
+
+```bash
+python run_pipeline.py --download --all
+python run_pipeline.py --generate-hooks --all
+python run_pipeline.py --format --all
+python run_pipeline.py --download --generate-hooks --format --all
+```
+
+The combined command runs collection, download, hook generation, then
+formatting in that order. `--all` does not bypass media filters, error handling,
+or retry safeguards; it only removes the per-run queue cap.
 
 For a safe manual validation of one real local downloaded clip, run:
 

@@ -297,7 +297,23 @@ class PendingClipDownloaderTests(unittest.TestCase):
         self.assertEqual(summary.pending, 3)
         self.assertEqual(summary.downloaded, 2)
         self.assertEqual(len(client.download_requests), 2)
+        self.assertEqual((summary.eligible, summary.processing, summary.remaining), (3, 2, 1))
         self.assertEqual(
             sum(clip.download_status == "pending" for clip in stored_clips),
             1,
         )
+
+    def test_process_all_bypasses_the_configured_download_limit(self) -> None:
+        """An explicit full pass attempts every pending download despite a smaller safety limit."""
+        clips = [
+            make_clip(f"manual-all-{index}", f"https://example.invalid/all-{index}")
+            for index in range(3)
+        ]
+        metadata_file, _, config = self.make_environment(clips, downloads_per_run=2)
+        client = FakeMediaClient()
+
+        summary = self.make_downloader(metadata_file, config, client).run(process_all=True)
+
+        self.assertEqual(summary.downloaded, 3)
+        self.assertEqual((summary.eligible, summary.processing, summary.remaining), (3, 3, 0))
+        self.assertEqual(len(client.download_requests), 3)

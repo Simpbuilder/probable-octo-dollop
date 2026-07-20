@@ -303,6 +303,29 @@ class HookGenerationTests(unittest.TestCase):
             updated_clip = load_all_clip_metadata(metadata_file)[0]
             self.assertEqual(updated_clip.selected_hook, "First choice")
 
+    def test_process_all_bypasses_the_configured_hook_generation_limit(self) -> None:
+        """An explicit full generation pass processes every eligible metadata record."""
+        with TemporaryDirectory() as temporary_directory:
+            metadata_file = Path(temporary_directory) / "clips.json"
+            for index in range(3):
+                save_clip_metadata(metadata_file, make_clip(f"hook-all-{index}"))
+            client = FakeHookClient(
+                [
+                    candidate_response(f"First {index}", f"Second {index}", f"Third {index}")
+                    for index in range(3)
+                ]
+            )
+
+            summary = self.make_generator(
+                metadata_file,
+                client,
+                maximum_clips_per_run=2,
+            ).run(process_all=True)
+
+            self.assertEqual(summary.generated, 3)
+            self.assertEqual((summary.eligible, summary.processing, summary.remaining), (3, 3, 0))
+            self.assertEqual(len(client.calls), 3)
+
 
 class HookReviewTests(unittest.TestCase):
     """Verify local numeric and custom review choices persist without a generation call."""
@@ -430,9 +453,27 @@ class HookGenerationRunnerTests(unittest.TestCase):
 
         generator.assert_called_once()
 
-    def test_generate_hooks_cannot_be_combined_with_formatting(self) -> None:
-        """A focused generation run rejects flags that would start a media stage."""
-        self.assertEqual(run_pipeline_main(["--generate-hooks", "--format"]), 2)
+    def test_combined_all_run_passes_the_override_to_every_enabled_stage(self) -> None:
+        """The explicit combined command collects, downloads, generates, and formats full queues."""
+        project_root = Path(__file__).resolve().parents[1]
+        config = load_collector_config(project_root / "config")
+        with (
+            patch("run_pipeline.load_collector_config", return_value=config),
+            patch("run_pipeline.run_manual_url_collector", return_value=0) as intake,
+            patch("run_pipeline.run_pending_clip_downloader", return_value=0) as downloader,
+            patch("run_pipeline.run_pending_hook_generator", return_value=0) as generator,
+            patch("run_pipeline.run_pending_clip_formatter", return_value=0) as formatter,
+        ):
+            self.assertEqual(
+                run_pipeline_main(["--download", "--generate-hooks", "--format", "--all"]),
+                0,
+            )
+
+        intake.assert_called_once_with(config, project_root, process_all=True)
+        downloader.assert_called_once_with(config, process_all=True)
+        generator.assert_called_once_with(config, project_root, force=False, process_all=True)
+        formatter.assert_called_once()
+        self.assertTrue(formatter.call_args.kwargs["process_all"])
 
     def test_format_run_never_starts_hook_generation(self) -> None:
         """Formatting is isolated even when automatic hook generation is enabled in config."""

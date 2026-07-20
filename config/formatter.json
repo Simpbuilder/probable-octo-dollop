@@ -16,7 +16,7 @@
   "crf": 20,
   "encoding_preset": "medium",
   "overwrite": false,
-  "maximum_clips_per_run": 5,
+  "maximum_clips_per_run": 50,
   "hook": {
     "enabled": true,
     "font_path": null,

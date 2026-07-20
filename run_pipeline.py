@@ -86,6 +86,11 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
         help="Regenerate candidates even when a clip already has saved hook candidates.",
     )
     parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Process every eligible queue item instead of the configured per-run safety limit.",
+    )
+    parser.add_argument(
         "--debug-hook-flow",
         metavar="CLIP_ID",
         help="Print saved hook values and the formatter choice for one clip without changing data.",
@@ -122,6 +127,7 @@ def print_manual_url_summary(summary: ManualUrlSummary) -> None:
     print(f"Duplicates: {summary.duplicates}")
     print(f"Invalid URLs: {summary.invalid_urls}")
     print(f"Errors: {summary.errors}")
+    _print_queue_limit_notice(summary)
 
 
 def print_download_summary(summary: DownloadSummary) -> None:
@@ -131,6 +137,7 @@ def print_download_summary(summary: DownloadSummary) -> None:
     print(f"Downloaded: {summary.downloaded}")
     print(f"Skipped: {summary.skipped}")
     print(f"Failed: {summary.failed}")
+    _print_queue_limit_notice(summary)
 
 
 def print_format_summary(summary: FormatSummary) -> None:
@@ -140,6 +147,7 @@ def print_format_summary(summary: FormatSummary) -> None:
     print(f"Formatted: {summary.formatted}")
     print(f"Skipped: {summary.skipped}")
     print(f"Failed: {summary.failed}")
+    _print_queue_limit_notice(summary)
 
 
 def print_hook_generation_summary(summary: HookGenerationSummary) -> None:
@@ -149,6 +157,18 @@ def print_hook_generation_summary(summary: HookGenerationSummary) -> None:
     print(f"Generated: {summary.generated}")
     print(f"Skipped: {summary.skipped}")
     print(f"Failed: {summary.failed}")
+    _print_queue_limit_notice(summary)
+
+
+def _print_queue_limit_notice(summary: object) -> None:
+    """Explain deferred work only when a configured stage limit left items untouched."""
+    remaining = getattr(summary, "remaining", 0)
+    if remaining <= 0:
+        return
+    print(f"Eligible: {getattr(summary, 'eligible')}")
+    print(f"Processing: {getattr(summary, 'processing')}")
+    print(f"Remaining: {remaining}")
+    print("Run again or use --all")
 
 
 def print_hook_flow_debug(
@@ -191,13 +211,19 @@ def print_hook_flow_debug(
     return 0
 
 
-def run_manual_url_collector(config: CollectorConfig, project_root: Path) -> int:
+def run_manual_url_collector(
+    config: CollectorConfig,
+    project_root: Path,
+    *,
+    process_all: bool = False,
+) -> int:
     """Run the local URL queue without requiring Reddit credentials or network access."""
     summary = ManualUrlCollector(
         input_file=project_root / "input_urls.txt",
         processed_file=config.output_path("metadata") / "processed_urls.txt",
         metadata_file=config.metadata_file,
-    ).collect()
+        maximum_urls_per_run=config.manual_urls_per_run,
+    ).collect(process_all=process_all)
     print_manual_url_summary(summary)
     return 1 if summary.errors else 0
 
@@ -247,7 +273,7 @@ def should_run_collectors(explicit_download: bool, explicit_format: bool) -> boo
     return not explicit_format or explicit_download
 
 
-def run_pending_clip_downloader(config: CollectorConfig) -> int:
+def run_pending_clip_downloader(config: CollectorConfig, *, process_all: bool = False) -> int:
     """Run the yt-dlp downloader and report missing dependencies without a traceback."""
     if config.downloader_config is None:
         print("Downloader not started: downloader configuration is missing.")
@@ -263,7 +289,7 @@ def run_pending_clip_downloader(config: CollectorConfig) -> int:
             metadata_file=config.metadata_file,
             config=config.downloader_config,
             media_client=media_client,
-        ).run()
+    ).run(process_all=process_all)
     except YtDlpClientError as error:
         print(f"Downloader not started: {error}")
         return 2
@@ -277,6 +303,7 @@ def run_pending_clip_formatter(
     maximum_clips_override: int | None = None,
     manual_hook: str | None = None,
     include_ready_for_manual_hook: bool = False,
+    process_all: bool = False,
 ) -> int:
     """Run the FFmpeg formatter and report missing local tools without a traceback."""
     if config.formatter_config is None:
@@ -298,6 +325,7 @@ def run_pending_clip_formatter(
         ).run(
             manual_hook=manual_hook,
             include_ready_for_manual_hook=include_ready_for_manual_hook,
+            process_all=process_all,
         )
     except FfmpegDependencyError as error:
         print(f"Formatter not started: {error}")
@@ -314,6 +342,7 @@ def run_pending_hook_generator(
     project_root: Path,
     *,
     force: bool = False,
+    process_all: bool = False,
 ) -> int:
     """Generate hook candidates from metadata without starting any media formatting stage."""
     if config.hook_generation_config is None:
@@ -330,7 +359,7 @@ def run_pending_hook_generator(
         metadata_file=config.metadata_file,
         config=config.hook_generation_config,
         client=client,
-    ).run(force=force)
+    ).run(force=force, process_all=process_all)
     print_hook_generation_summary(summary)
     return 1 if summary.failed else 0
 
@@ -348,10 +377,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if parsed_arguments.force_hooks and not parsed_arguments.generate_hooks:
         print("Pipeline not started: --force-hooks requires --generate-hooks.")
         return 2
-    if parsed_arguments.generate_hooks and (
-        parsed_arguments.download or parsed_arguments.format or parsed_arguments.format_one
-    ):
-        print("Pipeline not started: --generate-hooks runs separately from download and format commands.")
+    if parsed_arguments.all and parsed_arguments.format_one:
+        print("Pipeline not started: --all cannot be combined with --format-one.")
         return 2
     project_root = Path(__file__).resolve().parent
     try:
@@ -367,19 +394,25 @@ def main(arguments: Sequence[str] | None = None) -> int:
             manual_hook=parsed_arguments.hook,
         )
 
-    if parsed_arguments.generate_hooks:
+    format_requested = parsed_arguments.format or parsed_arguments.format_one
+    if parsed_arguments.generate_hooks and not (
+        parsed_arguments.download or format_requested
+    ):
         return run_pending_hook_generator(
             config,
             project_root,
             force=parsed_arguments.force_hooks,
+            process_all=parsed_arguments.all,
         )
 
-    format_requested = parsed_arguments.format or parsed_arguments.format_one
     exit_code = 0
     if should_run_collectors(parsed_arguments.download, format_requested):
         for collector_name in selected_collectors(config.pipeline_mode):
             if collector_name == "manual_urls":
-                exit_code = max(exit_code, run_manual_url_collector(config, project_root))
+                exit_code = max(
+                    exit_code,
+                    run_manual_url_collector(config, project_root, process_all=parsed_arguments.all),
+                )
             else:
                 exit_code = max(exit_code, run_reddit_api_collector(config, project_root))
     if should_run_downloader(
@@ -387,9 +420,22 @@ def main(arguments: Sequence[str] | None = None) -> int:
         parsed_arguments.download,
         format_only=format_requested and not parsed_arguments.download,
     ):
-        exit_code = max(exit_code, run_pending_clip_downloader(config))
-    if not format_requested and should_run_hook_generation(config, explicit_generation=False):
-        exit_code = max(exit_code, run_pending_hook_generator(config, project_root))
+        exit_code = max(
+            exit_code,
+            run_pending_clip_downloader(config, process_all=parsed_arguments.all),
+        )
+    if parsed_arguments.generate_hooks or (
+        not format_requested and should_run_hook_generation(config, explicit_generation=False)
+    ):
+        exit_code = max(
+            exit_code,
+            run_pending_hook_generator(
+                config,
+                project_root,
+                force=parsed_arguments.force_hooks,
+                process_all=parsed_arguments.all,
+            ),
+        )
     if should_run_formatter(config, format_requested):
         exit_code = max(
             exit_code,
@@ -400,6 +446,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 include_ready_for_manual_hook=(
                     parsed_arguments.format_one and parsed_arguments.hook is not None
                 ),
+                process_all=parsed_arguments.all,
             ),
         )
     return exit_code

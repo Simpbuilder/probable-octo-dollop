@@ -336,6 +336,24 @@ class PendingClipFormatterTests(unittest.TestCase):
             self.assertEqual(summary.pending, 3)
             self.assertEqual(summary.formatted, 2)
             self.assertEqual(len(client.format_requests), 2)
+            self.assertEqual((summary.eligible, summary.processing, summary.remaining), (3, 2, 1))
+
+    def test_process_all_bypasses_the_configured_format_limit(self) -> None:
+        """An explicit full format pass processes every eligible clip despite a smaller limit."""
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            clips = [
+                make_clip(f"format-all-{index}", self.create_source_file(root, f"format-all-{index}"))
+                for index in range(3)
+            ]
+            metadata_file, _, config = self.make_environment(clips, maximum_clips=2)
+            client = FakeFfmpegClient()
+
+            summary = self.make_formatter(metadata_file, config, client).run(process_all=True)
+
+            self.assertEqual(summary.formatted, 3)
+            self.assertEqual((summary.eligible, summary.processing, summary.remaining), (3, 3, 0))
+            self.assertEqual(len(client.format_requests), 3)
 
     def test_source_without_audio_still_formats(self) -> None:
         """Audio-free source media remains a valid vertical rendering input."""

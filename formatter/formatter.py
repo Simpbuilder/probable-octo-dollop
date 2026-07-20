@@ -49,6 +49,7 @@ class PendingClipFormatter:
         *,
         manual_hook: str | None = None,
         include_ready_for_manual_hook: bool = False,
+        process_all: bool = False,
     ) -> FormatSummary:
         """Format eligible downloads, optionally validating one explicit manual hook override."""
         summary = FormatSummary()
@@ -66,7 +67,12 @@ class PendingClipFormatter:
             include_ready_for_manual_hook=include_ready_for_manual_hook,
         )
         summary.pending = len(eligible_clips)
-        for clip in eligible_clips[: self._config.maximum_clips_per_run]:
+        summary.eligible = len(eligible_clips)
+        summary.processing = len(eligible_clips) if process_all else min(
+            len(eligible_clips), self._config.maximum_clips_per_run
+        )
+        summary.remaining = summary.eligible - summary.processing
+        for clip in eligible_clips[: summary.processing]:
             self._process_clip(clip, summary, manual_hook=manual_hook)
         return summary
 

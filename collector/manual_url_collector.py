@@ -37,6 +37,9 @@ class ManualUrlSummary:
     duplicates: int = 0
     invalid_urls: int = 0
     errors: int = 0
+    eligible: int = 0
+    processing: int = 0
+    remaining: int = 0
 
 
 class ManualUrlCollector:
@@ -48,6 +51,7 @@ class ManualUrlCollector:
         processed_file: Path,
         metadata_file: Path,
         *,
+        maximum_urls_per_run: int = 50,
         clock: Callable[[], datetime] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -55,10 +59,13 @@ class ManualUrlCollector:
         self._input_file = Path(input_file)
         self._processed_file = Path(processed_file)
         self._metadata_file = Path(metadata_file)
+        if maximum_urls_per_run <= 0:
+            raise ValueError("maximum_urls_per_run must be greater than zero.")
+        self._maximum_urls_per_run = maximum_urls_per_run
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._logger = logger or logging.getLogger(__name__)
 
-    def collect(self) -> ManualUrlSummary:
+    def collect(self, *, process_all: bool = False) -> ManualUrlSummary:
         """Process queue entries while retaining invalid or failed lines for retry."""
         summary = ManualUrlSummary()
         try:
@@ -68,15 +75,27 @@ class ManualUrlCollector:
             self._logger.error("Could not read manual URL queue %s: %s", self._input_file, error)
             return summary
 
+        queue_entries = [line for line in input_lines if line.strip() and not line.strip().startswith("#")]
+        summary.urls_found = len(queue_entries)
+        summary.eligible = len(queue_entries)
+        summary.processing = len(queue_entries) if process_all else min(
+            len(queue_entries), self._maximum_urls_per_run
+        )
+        summary.remaining = summary.eligible - summary.processing
+
         remaining_lines: list[str] = []
         completed_urls: list[str] = []
+        processed_entries = 0
         for line in input_lines:
             stripped_line = line.strip()
             if not stripped_line or stripped_line.startswith("#"):
                 remaining_lines.append(line)
                 continue
 
-            summary.urls_found += 1
+            if processed_entries >= summary.processing:
+                remaining_lines.append(line)
+                continue
+            processed_entries += 1
             try:
                 manual_url = normalize_manual_url(stripped_line)
                 clip = create_manual_clip_metadata(manual_url, added_at=self._clock())

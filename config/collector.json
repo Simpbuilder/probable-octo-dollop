@@ -1,5 +1,6 @@
 {
   "pipeline_mode": "manual_urls",
+  "manual_urls_per_run": 50,
   "downloader": {
     "enabled": false,
     "directory": "clips/pending",
@@ -9,7 +10,7 @@
     "retries": 2,
     "timeout_seconds": 30,
     "overwrite": false,
-    "downloads_per_run": 5
+    "downloads_per_run": 50
   },
   "output_folders": {
     "pending": "clips/pending",

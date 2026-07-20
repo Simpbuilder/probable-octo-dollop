@@ -54,3 +54,6 @@ class DownloadSummary:
     downloaded: int = 0
     skipped: int = 0
     failed: int = 0
+    eligible: int = 0
+    processing: int = 0
+    remaining: int = 0

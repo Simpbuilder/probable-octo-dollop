@@ -79,6 +79,12 @@ class CollectorConfig:
     downloader_config: "DownloaderConfig | None" = None
     formatter_config: "FormatterConfig | None" = None
     hook_generation_config: "HookGenerationConfig | None" = None
+    manual_urls_per_run: int = 50
+
+    def __post_init__(self) -> None:
+        """Validate source-agnostic intake safety limits."""
+        if self.manual_urls_per_run <= 0:
+            raise ValueError("manual_urls_per_run must be greater than zero.")
 
     @property
     def enabled_sources(self) -> tuple[str, ...]:
@@ -299,7 +305,7 @@ class DownloaderConfig:
     retries: int = 2
     timeout_seconds: int = 30
     overwrite: bool = False
-    downloads_per_run: int = 5
+    downloads_per_run: int = 50
     enabled: bool = False
 
     def __post_init__(self) -> None:
@@ -325,7 +331,7 @@ class HookGenerationConfig:
     enabled: bool = False
     model: str = "gpt-4o-mini"
     maximum_characters: int = 60
-    maximum_clips_per_run: int = 10
+    maximum_clips_per_run: int = 50
     automatic_selection: bool = False
     blocked_phrases: tuple[str, ...] = DEFAULT_BLOCKED_HOOK_PHRASES
 
@@ -431,7 +437,7 @@ class FormatterConfig:
     crf: int = 20
     encoding_preset: str = "medium"
     overwrite: bool = False
-    maximum_clips_per_run: int = 5
+    maximum_clips_per_run: int = 50
     hook: HookConfig = field(default_factory=HookConfig)
 
     def __post_init__(self) -> None:

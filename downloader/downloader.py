@@ -40,8 +40,8 @@ class PendingClipDownloader:
         self._ffmpeg_available = ffmpeg_available or is_ffmpeg_available
         self._logger = logger or logging.getLogger(__name__)
 
-    def run(self) -> DownloadSummary:
-        """Download up to the configured limit of pending clips with source URLs."""
+    def run(self, *, process_all: bool = False) -> DownloadSummary:
+        """Download eligible pending clips, respecting the configured limit unless overridden."""
         summary = DownloadSummary()
         try:
             clips = load_all_clip_metadata(self._metadata_file)
@@ -53,7 +53,12 @@ class PendingClipDownloader:
         pending_clips = [clip for clip in clips if clip.download_status == "pending"]
         summary.pending = len(pending_clips)
         eligible_clips = [clip for clip in pending_clips if clip.source_url.strip()]
-        for clip in eligible_clips[: self._config.downloads_per_run]:
+        summary.eligible = len(eligible_clips)
+        summary.processing = len(eligible_clips) if process_all else min(
+            len(eligible_clips), self._config.downloads_per_run
+        )
+        summary.remaining = summary.eligible - summary.processing
+        for clip in eligible_clips[: summary.processing]:
             self._process_clip(clip, summary)
         return summary
 
