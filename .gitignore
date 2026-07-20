@@ -49,3 +49,5 @@ Thumbs.db
 # Keep placeholder files tracked
 !.gitkeep
 !**/.gitkeep
+
+.agents/
