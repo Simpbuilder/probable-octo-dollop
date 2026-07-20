@@ -30,6 +30,13 @@ from hook_generator import (
     inspect_hook_flow,
     load_openai_api_key,
 )
+from publisher import (
+    InstagramUploader,
+    UploadSummary,
+    ZernioClientError,
+    create_zernio_client,
+    load_zernio_api_key,
+)
 
 from collector import (
     CollectionSummary,
@@ -95,6 +102,26 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
         metavar="CLIP_ID",
         help="Print saved hook values and the formatter choice for one clip without changing data.",
     )
+    parser.add_argument(
+        "--list-zernio-accounts",
+        action="store_true",
+        help="List connected Zernio accounts without uploading or creating a post.",
+    )
+    parser.add_argument(
+        "--upload-instagram",
+        action="store_true",
+        help="Upload eligible hooked ready MP4 files to Zernio using the configured draft mode.",
+    )
+    parser.add_argument(
+        "--upload-one-instagram",
+        action="store_true",
+        help="Upload one eligible hooked ready MP4 file to Zernio using the configured draft mode.",
+    )
+    parser.add_argument(
+        "--publish-now",
+        action="store_true",
+        help="Publish an explicit Instagram upload immediately instead of creating a draft.",
+    )
     return parser.parse_args(arguments)
 
 
@@ -155,6 +182,18 @@ def print_hook_generation_summary(summary: HookGenerationSummary) -> None:
     print("Hook generation")
     print(f"Pending: {summary.pending}")
     print(f"Generated: {summary.generated}")
+    print(f"Skipped: {summary.skipped}")
+    print(f"Failed: {summary.failed}")
+    _print_queue_limit_notice(summary)
+
+
+def print_instagram_upload_summary(summary: UploadSummary) -> None:
+    """Print the stable terminal summary for an explicit Instagram upload pass."""
+    print("Instagram upload queue")
+    print(f"Found hooked MP4 files: {summary.found}")
+    print(f"Drafts created: {summary.drafts}")
+    print(f"Published now: {summary.published}")
+    print(f"Duplicates: {summary.duplicates}")
     print(f"Skipped: {summary.skipped}")
     print(f"Failed: {summary.failed}")
     _print_queue_limit_notice(summary)
@@ -364,6 +403,67 @@ def run_pending_hook_generator(
     return 1 if summary.failed else 0
 
 
+def run_zernio_account_listing(project_root: Path) -> int:
+    """List safe connected-account details without writing data or exposing credentials."""
+    try:
+        client = create_zernio_client(load_zernio_api_key(project_root / ".env"))
+        accounts = client.list_accounts()
+    except ZernioClientError as error:
+        print(f"Zernio account listing not started: {error}")
+        return 2
+
+    print("Zernio connected accounts")
+    if not accounts:
+        print("No connected accounts found.")
+        return 0
+    for account in accounts:
+        display_name = account.display_name or "(not provided)"
+        username = account.username or "(not provided)"
+        profile_id = account.profile_id or "(not provided)"
+        print(f"Platform: {account.platform}")
+        print(f"Username: {username}")
+        print(f"Display name: {display_name}")
+        print(f"Account ID: {account.account_id}")
+        print(f"Profile ID: {profile_id}")
+        print(f"Status: {'active' if account.active else 'inactive'}")
+    return 0
+
+
+def run_instagram_uploader(
+    config: CollectorConfig,
+    project_root: Path,
+    *,
+    upload_one: bool,
+    process_all: bool,
+    publish_now: bool,
+) -> int:
+    """Run the explicit hooked-Reel uploader without adding it to normal pipeline execution."""
+    if config.instagram_config is None:
+        print("Instagram uploader not started: config/instagram.json is missing.")
+        return 2
+    if not config.instagram_config.enabled:
+        print("Instagram uploader not started: set enabled to true in config/instagram.json.")
+        return 2
+    try:
+        client = create_zernio_client(load_zernio_api_key(project_root / ".env"))
+    except ZernioClientError as error:
+        print(f"Instagram uploader not started: {error}")
+        return 2
+
+    summary = InstagramUploader(
+        metadata_file=config.metadata_file,
+        history_file=config.output_path("metadata") / "zernio_post_history.json",
+        config=config.instagram_config,
+        client=client,
+    ).run(
+        process_all=process_all,
+        maximum_uploads_override=1 if upload_one else None,
+        publish_now_override=True if publish_now else None,
+    )
+    print_instagram_upload_summary(summary)
+    return 1 if summary.failed else 0
+
+
 def main(arguments: Sequence[str] | None = None) -> int:
     """Load configuration and run the requested collection, download, and formatting stages."""
     configure_logging()
@@ -380,12 +480,47 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if parsed_arguments.all and parsed_arguments.format_one:
         print("Pipeline not started: --all cannot be combined with --format-one.")
         return 2
+    if parsed_arguments.upload_instagram and parsed_arguments.upload_one_instagram:
+        print("Pipeline not started: choose --upload-instagram or --upload-one-instagram.")
+        return 2
+    if parsed_arguments.all and parsed_arguments.upload_one_instagram:
+        print("Pipeline not started: --all cannot be combined with --upload-one-instagram.")
+        return 2
+    upload_requested = parsed_arguments.upload_instagram or parsed_arguments.upload_one_instagram
+    if parsed_arguments.publish_now and not upload_requested:
+        print("Pipeline not started: --publish-now requires an Instagram upload command.")
+        return 2
+    if parsed_arguments.list_zernio_accounts and upload_requested:
+        print("Pipeline not started: --list-zernio-accounts cannot be combined with an upload command.")
+        return 2
+    if (parsed_arguments.list_zernio_accounts or upload_requested) and any(
+        (
+            parsed_arguments.download,
+            parsed_arguments.format,
+            parsed_arguments.format_one,
+            parsed_arguments.generate_hooks,
+            parsed_arguments.debug_hook_flow is not None,
+        )
+    ):
+        print("Pipeline not started: Zernio commands must run separately from collection stages.")
+        return 2
     project_root = Path(__file__).resolve().parent
     try:
         config = load_collector_config(project_root / "config")
     except ConfigurationError as error:
         print(f"Pipeline not started: {error}")
         return 2
+
+    if parsed_arguments.list_zernio_accounts:
+        return run_zernio_account_listing(project_root)
+    if upload_requested:
+        return run_instagram_uploader(
+            config,
+            project_root,
+            upload_one=parsed_arguments.upload_one_instagram,
+            process_all=parsed_arguments.all,
+            publish_now=parsed_arguments.publish_now,
+        )
 
     if parsed_arguments.debug_hook_flow is not None:
         return print_hook_flow_debug(

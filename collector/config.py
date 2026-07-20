@@ -13,6 +13,7 @@ from .models import (
     FormatterConfig,
     HookConfig,
     HookGenerationConfig,
+    InstagramConfig,
     PipelineMode,
     SourceConfig,
 )
@@ -57,6 +58,9 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
     hook_generation_config = _parse_hook_generation_config(
         _load_optional_json_object(config_directory / "hooks.json")
     )
+    instagram_config = _parse_instagram_config(
+        _load_optional_json_object(config_directory / "instagram.json"), project_root
+    )
 
     config = CollectorConfig(
         source_configs=source_configs,
@@ -66,6 +70,7 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
         downloader_config=downloader_config,
         formatter_config=formatter_config,
         hook_generation_config=hook_generation_config,
+        instagram_config=instagram_config,
         manual_urls_per_run=manual_urls_per_run,
     )
     _validate_collector_config(config)
@@ -290,6 +295,40 @@ def _parse_hook_generation_config(data: Mapping[str, Any] | None) -> HookGenerat
         raise ConfigurationError(f"Invalid hook generation settings: {error}") from error
 
 
+def _parse_instagram_config(
+    data: Mapping[str, Any] | None,
+    project_root: Path,
+) -> InstagramConfig | None:
+    """Load optional explicit-upload settings without changing older configurations."""
+    if data is None:
+        return None
+    try:
+        return InstagramConfig(
+            enabled=_required_bool(data, "enabled", "instagram.json"),
+            platform=_required_string(data, "platform", "instagram.json").lower(),
+            account_id=_optional_string_or_none(data, "account_id", "instagram.json"),
+            account_username=_optional_string_or_none(data, "account_username", "instagram.json"),
+            source_directory=_resolve_path(
+                _required_string(data, "source_directory", "instagram.json"), project_root
+            ),
+            publish_mode=_required_string(data, "publish_mode", "instagram.json"),  # type: ignore[arg-type]
+            default_caption=_required_string(data, "default_caption", "instagram.json"),
+            maximum_uploads_per_run=_required_int(
+                data, "maximum_uploads_per_run", "instagram.json"
+            ),
+            delete_after_upload=_required_bool(data, "delete_after_upload", "instagram.json"),
+            move_after_upload=_required_bool(data, "move_after_upload", "instagram.json"),
+            posted_directory=_resolve_path(
+                _required_string(data, "posted_directory", "instagram.json"), project_root
+            ),
+            duplicate_check_enabled=_required_bool(
+                data, "duplicate_check_enabled", "instagram.json"
+            ),
+        )
+    except ValueError as error:
+        raise ConfigurationError(f"Invalid Instagram uploader settings: {error}") from error
+
+
 def _validate_collector_config(config: CollectorConfig) -> None:
     """Apply cross-file validation after both configuration files are loaded."""
     if not config.enabled_sources:
@@ -318,6 +357,16 @@ def _validate_collector_config(config: CollectorConfig) -> None:
         and config.formatter_config.output_directory != config.output_path("ready")
     ):
         raise ConfigurationError("formatter.output_directory must match the ready output folder.")
+    if config.instagram_config is not None:
+        expected_source_directory = config.output_path("ready") / "hooked"
+        if config.instagram_config.source_directory != expected_source_directory:
+            raise ConfigurationError(
+                "instagram.source_directory must match the hooked ready output folder."
+            )
+        if config.instagram_config.posted_directory != config.output_path("posted"):
+            raise ConfigurationError(
+                "instagram.posted_directory must match the posted output folder."
+            )
 
 
 def _resolve_path(raw_path: str, project_root: Path) -> Path:

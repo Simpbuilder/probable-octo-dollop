@@ -19,7 +19,7 @@ ENV/
 logs/*
 !logs/.gitkeep
 
-# Generated metadata
+# Generated metadata and local Zernio upload history
 metadata/*.json
 metadata/processed_urls.txt
 !metadata/.gitkeep

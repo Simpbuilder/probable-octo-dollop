@@ -14,7 +14,8 @@ pip install -r requirements.txt
 ```
 
 This installs PRAW, `python-dotenv`, `yt-dlp`, Pillow for local hook-text overlays,
-and the OpenAI SDK for optional hook-candidate generation.
+the OpenAI SDK for optional hook-candidate generation, and `requests` for the
+explicit Zernio upload client.
 
 ### FFmpeg
 
@@ -233,6 +234,73 @@ default. It includes:
 limits. Its `automatic_selection` setting is `false` by default, so generated
 candidates require review unless that setting is deliberately enabled.
 
+## Instagram Reel Uploads
+
+The optional Zernio uploader is intentionally separate from collection and
+formatting. It reads only direct `.mp4` files in `clips/ready/hooked/`; it never
+reads `clips/ready/plain/`, `clips/pending/`, source downloads, or files that
+have been moved to `clips/posted/`.
+
+Create `.env` from the template and set `ZERNIO_API_KEY` to an API key with
+access to the connected Instagram account. The key is loaded only for explicit
+Zernio commands and is never printed. Use this command to inspect the account
+IDs available to that key:
+
+```bash
+py run_pipeline.py --list-zernio-accounts
+```
+
+The command prints platform, username, display name, account ID, profile ID,
+and connection status, but never credentials. Set `account_id` in
+`config/instagram.json` when more than one active Instagram account is listed.
+When exactly one active Instagram account is available, an explicit upload
+command can use that unambiguous account without changing the saved config.
+
+`config/instagram.json` controls the stage. It is disabled by default and has a
+one-upload queue limit and `publish_mode: "draft"` for a deliberately cautious
+first use. Its `default_caption` is passed to Zernio exactly as written; the
+uploader does not append hooks, hashtags, emojis, or generated text.
+
+To enable uploads, set `enabled` to `true`, review the account ID and caption,
+then create one Zernio draft from one finished hooked Reel:
+
+```bash
+py run_pipeline.py --upload-one-instagram
+```
+
+This command performs the documented Zernio sequence: request a presigned media
+URL, upload the local MP4, then create an Instagram post with
+`contentType: "reels"`. The successful post ID, account ID, filename, public
+media URL, timestamp, publish mode, and status are stored locally in
+`metadata/zernio_post_history.json`. That file and Zernio's recent post list are
+used to prevent duplicate upload attempts.
+
+Create drafts up to the configured queue limit with:
+
+```bash
+py run_pipeline.py --upload-instagram
+```
+
+Use `--all` only when deliberately processing every eligible hooked Reel:
+
+```bash
+py run_pipeline.py --upload-instagram --all
+```
+
+Publishing immediately remains an explicit opt-in and should be used only after
+the draft workflow is confirmed:
+
+```bash
+py run_pipeline.py --upload-one-instagram --publish-now
+```
+
+By default, a successful upload leaves the hooked MP4 in place. Set
+`move_after_upload` to `true` to move it into `clips/posted/`, or set
+`delete_after_upload` to `true` only when deletion is intentionally desired.
+The two settings cannot be enabled together. Upload failures leave the local
+video and do not stop later eligible files; retry the same explicit command
+after correcting the reported issue.
+
 ## Run
 
 Run the configured metadata collectors without downloading media:
@@ -330,6 +398,7 @@ REDDIT_CLIENT_ID=
 REDDIT_CLIENT_SECRET=
 REDDIT_USER_AGENT=
 OPENAI_API_KEY=
+ZERNIO_API_KEY=
 ```
 
 The `.env` file is ignored by Git and must never contain committed credentials.
@@ -338,6 +407,7 @@ maximum age, sorting mode, and NSFW handling.
 
 ## Not Yet Implemented
 
-There are no captions, logos, watermarks, video analysis, queueing, or Instagram
-posting. FFmpeg is used only for downloader stream merges and the local vertical
-formatting stage.
+There are no captions, logos, watermarks, video analysis, or automatic social
+posting. Instagram publishing is available only through the explicit Zernio
+commands above. FFmpeg is used only for downloader stream merges and the local
+vertical formatting stage.

@@ -10,6 +10,7 @@ from .models import (
     FormatterConfig,
     HookConfig,
     HookGenerationConfig,
+    InstagramConfig,
     PipelineMode,
     SourceConfig,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "FormatterConfig",
     "HookConfig",
     "HookGenerationConfig",
+    "InstagramConfig",
     "ManualUrlCollector",
     "ManualUrlSummary",
     "PipelineMode",

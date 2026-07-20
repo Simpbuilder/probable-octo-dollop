@@ -11,6 +11,7 @@ from typing import Literal, Mapping
 DownloadStatus = Literal["pending", "downloaded", "failed"]
 ProcessingStatus = Literal["pending", "approved", "rejected", "ready", "posted"]
 PipelineMode = Literal["reddit_api", "manual_urls", "both"]
+InstagramPublishMode = Literal["draft", "publish_now"]
 CropMode = Literal["fit"]
 HookStatus = Literal["rendered", "skipped", "failed"]
 HookSource = Literal["manual", "source_title", "generated"]
@@ -79,6 +80,7 @@ class CollectorConfig:
     downloader_config: "DownloaderConfig | None" = None
     formatter_config: "FormatterConfig | None" = None
     hook_generation_config: "HookGenerationConfig | None" = None
+    instagram_config: "InstagramConfig | None" = None
     manual_urls_per_run: int = 50
 
     def __post_init__(self) -> None:
@@ -354,6 +356,41 @@ class HookGenerationConfig:
             raise ValueError("hook generation blocked_phrases must not contain empty values.")
         if len(set(normalized_phrases)) != len(normalized_phrases):
             raise ValueError("hook generation blocked_phrases must be distinct.")
+
+
+@dataclass(frozen=True, slots=True)
+class InstagramConfig:
+    """Validated settings for explicit Zernio-backed Instagram Reel uploads."""
+
+    enabled: bool = False
+    platform: str = "instagram"
+    account_id: str | None = None
+    account_username: str | None = None
+    source_directory: Path = Path("clips/ready/hooked")
+    publish_mode: InstagramPublishMode = "draft"
+    default_caption: str = ""
+    maximum_uploads_per_run: int = 1
+    delete_after_upload: bool = False
+    move_after_upload: bool = False
+    posted_directory: Path = Path("clips/posted")
+    duplicate_check_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        """Validate upload safety settings before local files can be sent remotely."""
+        if self.platform != "instagram":
+            raise ValueError("instagram platform must be 'instagram'.")
+        if self.account_id is not None and not self.account_id.strip():
+            raise ValueError("instagram account_id must be a non-empty string or null.")
+        if self.account_username is not None and not self.account_username.strip():
+            raise ValueError("instagram account_username must be a non-empty string or null.")
+        if self.publish_mode not in {"draft", "publish_now"}:
+            raise ValueError("instagram publish_mode must be 'draft' or 'publish_now'.")
+        if not self.default_caption.strip():
+            raise ValueError("instagram default_caption must not be empty.")
+        if self.maximum_uploads_per_run <= 0:
+            raise ValueError("instagram maximum_uploads_per_run must be greater than zero.")
+        if self.delete_after_upload and self.move_after_upload:
+            raise ValueError("instagram cannot delete and move the same uploaded file.")
 
 
 @dataclass(frozen=True, slots=True)
