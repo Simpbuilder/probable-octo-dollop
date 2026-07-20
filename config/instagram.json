@@ -1,13 +1,13 @@
 {
-  "enabled": false,
+  "enabled": true,
   "platform": "instagram",
-  "account_id": null,
-  "account_username": null,
+  "account_id": "6a57d5bb3d50078def8c8770",
+  "account_username": "infobuilderdaily",
   "source_directory": "clips/ready/hooked",
   "publish_mode": "draft",
   "default_caption": "Tonight, V stepped into the crowd, taking in live performances at Vogue World: Hollywood. Known for his own standout fashion moments, he kept it effortlessly stylish in a look worthy of the runway.",
-  "maximum_uploads_per_run": 1,
-  "delete_after_upload": false,
+  "maximum_uploads_per_run": 50,
+  "delete_after_upload": true,
   "move_after_upload": false,
   "posted_directory": "clips/posted",
   "duplicate_check_enabled": true
