@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
+from collections import Counter
 from dataclasses import dataclass
 from io import StringIO
 import json
@@ -65,6 +66,31 @@ class SystemAvailability:
     ffprobe: bool
     openai_api_key: bool
     zernio_api_key: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineProgress:
+    """Read-only queue sizes for the pipeline stages shown in the local UI."""
+
+    urls_to_import: int
+    downloads_to_run: int
+    hooks_to_generate: int
+    hooks_to_review: int
+    formats_to_run: int
+    uploads_to_run: int
+
+
+@dataclass(frozen=True, slots=True)
+class InstagramOverview:
+    """Safe local Instagram account and history summary for the UI."""
+
+    account_username: str | None
+    publish_mode: str
+    fixed_caption: str
+    pending_uploads: int
+    history_total: int
+    drafts: int
+    published: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +244,52 @@ def load_system_availability(project_root: Path) -> SystemAvailability:
     )
 
 
+def load_pipeline_progress(
+    config: CollectorConfig,
+    counts: DashboardCounts | None = None,
+) -> PipelineProgress:
+    """Summarize remaining work without modifying metadata or invoking a pipeline stage."""
+    counts = counts or load_dashboard_counts(config.metadata_file.parent.parent)
+    clips = load_all_clip_metadata(config.metadata_file)
+    formats_to_run = sum(
+        clip.download_status == "downloaded" and clip.processing_status == "pending"
+        for clip in clips
+    )
+    overview = load_instagram_overview(config)
+    return PipelineProgress(
+        urls_to_import=counts.urls_waiting,
+        downloads_to_run=counts.pending_metadata,
+        hooks_to_generate=counts.awaiting_hook_generation,
+        hooks_to_review=counts.awaiting_hook_review,
+        formats_to_run=formats_to_run,
+        uploads_to_run=overview.pending_uploads,
+    )
+
+
+def load_instagram_overview(config: CollectorConfig) -> InstagramOverview:
+    """Return local upload state only; never contacts Zernio or exposes credentials."""
+    instagram = config.instagram_config
+    if instagram is None:
+        raise ValueError("Instagram configuration is missing.")
+    history = _load_history_safely(config.output_path("metadata") / "zernio_post_history.json")
+    history_by_filename = _history_by_filename(history)
+    ready_files = _direct_media_files(config.output_path("ready") / "hooked")
+    status_counts = Counter(
+        str(record.get("status") or "").casefold()
+        for record in history
+        if isinstance(record, Mapping)
+    )
+    return InstagramOverview(
+        account_username=instagram.account_username,
+        publish_mode=instagram.publish_mode,
+        fixed_caption=instagram.default_caption,
+        pending_uploads=sum(path.name not in history_by_filename for path in ready_files),
+        history_total=len(history),
+        drafts=status_counts["draft"],
+        published=status_counts["published"],
+    )
+
+
 def load_failed_items(config: CollectorConfig) -> list[FailedItem]:
     """Return only stored, retryable errors from current metadata records."""
     failed_items: list[FailedItem] = []
@@ -267,13 +339,7 @@ def load_ready_videos(config: CollectorConfig) -> list[ReadyVideo]:
         if clip.formatted_file_path is not None
     }
     history = _load_history_safely(config.output_path("metadata") / "zernio_post_history.json")
-    history_by_filename = {
-        str(record.get("filename") or record.get("video_filename") or ""): str(
-            record.get("status") or "uploaded"
-        )
-        for record in history
-        if isinstance(record, Mapping)
-    }
+    history_by_filename = _history_by_filename(history)
     videos: list[ReadyVideo] = []
     for path in _direct_media_files(config.output_path("ready") / "hooked"):
         clip = clips_by_path.get(path.resolve())
@@ -374,6 +440,16 @@ def _load_history_safely(history_file: Path) -> list[dict[str, object]]:
         return load_post_history(history_file)
     except ValueError:
         return []
+
+
+def _history_by_filename(records: Sequence[Mapping[str, object]]) -> dict[str, str]:
+    """Index durable local history records by filename for UI-only status presentation."""
+    return {
+        str(record.get("filename") or record.get("video_filename") or ""): str(
+            record.get("status") or "uploaded"
+        )
+        for record in records
+    }
 
 
 def _direct_media_files(directory: Path) -> list[Path]:

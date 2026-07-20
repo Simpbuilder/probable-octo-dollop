@@ -10,9 +10,12 @@ import unittest
 from unittest.mock import patch
 
 from collector import load_collector_config
+from publisher.history import append_post_history, build_post_history_record
 from ui_helpers import (
     UiConfigurationValues,
     append_unique_urls,
+    load_instagram_overview,
+    load_pipeline_progress,
     run_manual_import,
     run_pipeline_action,
     save_ui_configuration,
@@ -100,3 +103,38 @@ class UiHelperTests(unittest.TestCase):
             invalid_values = replace(values, uploads_per_run=0)
             with self.assertRaises(ValueError):
                 save_ui_configuration(root, invalid_values)
+
+    def test_pipeline_progress_and_instagram_overview_are_read_only_local_summaries(self) -> None:
+        """The polished UI can count queues and history without invoking the uploader or any network client."""
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            shutil.copytree(PROJECT_ROOT / "config", root / "config")
+            (root / "input_urls.txt").write_text("https://example.com/queued\n", encoding="utf-8")
+            ready_directory = root / "clips" / "ready" / "hooked"
+            ready_directory.mkdir(parents=True)
+            uploaded_file = ready_directory / "uploaded.mp4"
+            pending_file = ready_directory / "pending.mp4"
+            uploaded_file.write_bytes(b"video")
+            pending_file.write_bytes(b"video")
+            append_post_history(
+                root / "metadata" / "zernio_post_history.json",
+                build_post_history_record(
+                    post_id="post-1",
+                    status="draft",
+                    account_id="account-1",
+                    filename=uploaded_file.name,
+                    public_media_url="https://media.example/uploaded.mp4",
+                    publish_mode="draft",
+                ),
+            )
+
+            config = load_collector_config(root / "config")
+            progress = load_pipeline_progress(config)
+            overview = load_instagram_overview(config)
+
+            self.assertEqual(progress.urls_to_import, 1)
+            self.assertEqual(progress.uploads_to_run, 1)
+            self.assertEqual(overview.pending_uploads, 1)
+            self.assertEqual(overview.history_total, 1)
+            self.assertEqual(overview.drafts, 1)
+            self.assertEqual(overview.published, 0)
