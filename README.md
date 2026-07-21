@@ -262,6 +262,23 @@ one-upload queue limit and `publish_mode: "draft"` for a deliberately cautious
 first use. Its `default_caption` is passed to Zernio exactly as written; the
 uploader does not append hooks, hashtags, emojis, or generated text.
 
+Bulk draft and publish-now commands can optionally space successful posts.
+`delay_between_posts_enabled` defaults to `true`,
+`delay_between_posts_seconds` defaults to `30`, and `maximum_delay_seconds`
+defaults to `300`. The delay is applied only between successful eligible posts;
+duplicates, skipped files, failures, the first post, and the final post never
+add a wait. Override it for one explicit batch with `--post-delay` (zero
+disables spacing, and values above the configured maximum are capped):
+
+```bash
+py run_pipeline.py --upload-instagram --all --post-delay 30
+py run_pipeline.py --upload-instagram --publish-now --all --post-delay 60
+```
+
+The local Instagram page provides the same setting with presets, a custom
+seconds field, an estimated batch-spacing duration, and a visible countdown
+during multi-video uploads.
+
 To enable uploads, set `enabled` to `true`, review the account ID and caption,
 then create one Zernio draft from one finished hooked Reel:
 

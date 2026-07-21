@@ -23,6 +23,7 @@ from hook_generator import (
     select_hook_candidate,
 )
 from hook_generator.generator import validate_custom_hook
+from publisher import UploadProgressCallback, estimate_batch_duration
 from publisher.history import load_post_history
 
 
@@ -91,6 +92,10 @@ class InstagramOverview:
     history_total: int
     drafts: int
     published: int
+    delay_enabled: bool = True
+    delay_seconds: int = 30
+    maximum_delay_seconds: int = 300
+    estimated_batch_seconds: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +129,9 @@ class UiConfigurationValues:
     instagram_caption: str
     instagram_account_id: str | None
     automatic_hook_selection: bool
+    instagram_delay_enabled: bool = True
+    instagram_delay_seconds: int = 30
+    instagram_maximum_delay_seconds: int = 300
 
 
 def run_pipeline_action(arguments: Sequence[str]) -> PipelineActionResult:
@@ -161,6 +169,45 @@ def run_manual_import(project_root: Path) -> PipelineActionResult:
         )
     return PipelineActionResult(
         arguments=("manual-import", "--all"),
+        exit_code=exit_code,
+        output=output.getvalue().strip(),
+    )
+
+
+def run_instagram_upload_action(
+    project_root: Path,
+    *,
+    upload_one: bool,
+    process_all: bool,
+    publish_now: bool,
+    post_delay: int | None = None,
+    progress_callback: UploadProgressCallback | None = None,
+) -> PipelineActionResult:
+    """Run the established uploader while allowing the UI to render local batch progress."""
+    import run_pipeline
+
+    project_root = Path(project_root).resolve()
+    output = StringIO()
+    try:
+        config = load_collector_config(project_root / "config")
+    except ConfigurationError as error:
+        return PipelineActionResult(
+            arguments=("instagram-upload",),
+            exit_code=2,
+            output=f"Instagram uploader not started: {error}",
+        )
+    with redirect_stdout(output), redirect_stderr(output):
+        exit_code = run_pipeline.run_instagram_uploader(
+            config,
+            project_root,
+            upload_one=upload_one,
+            process_all=process_all,
+            publish_now=publish_now,
+            post_delay=post_delay,
+            progress_callback=progress_callback,
+        )
+    return PipelineActionResult(
+        arguments=("instagram-upload", "--all") if process_all else ("instagram-upload",),
         exit_code=exit_code,
         output=output.getvalue().strip(),
     )
@@ -287,6 +334,15 @@ def load_instagram_overview(config: CollectorConfig) -> InstagramOverview:
         history_total=len(history),
         drafts=status_counts["draft"],
         published=status_counts["published"],
+        delay_enabled=instagram.delay_between_posts_enabled,
+        delay_seconds=instagram.delay_between_posts_seconds,
+        maximum_delay_seconds=instagram.maximum_delay_seconds,
+        estimated_batch_seconds=estimate_batch_duration(
+            sum(path.name not in history_by_filename for path in ready_files),
+            instagram.delay_between_posts_seconds
+            if instagram.delay_between_posts_enabled
+            else 0,
+        ),
     )
 
 
@@ -372,6 +428,9 @@ def load_ui_configuration(config: CollectorConfig) -> UiConfigurationValues:
         instagram_caption=config.instagram_config.default_caption,
         instagram_account_id=config.instagram_config.account_id,
         automatic_hook_selection=config.hook_generation_config.automatic_selection,
+        instagram_delay_enabled=config.instagram_config.delay_between_posts_enabled,
+        instagram_delay_seconds=config.instagram_config.delay_between_posts_seconds,
+        instagram_maximum_delay_seconds=config.instagram_config.maximum_delay_seconds,
     )
 
 
@@ -396,6 +455,9 @@ def save_ui_configuration(project_root: Path, values: UiConfigurationValues) -> 
     instagram_data["publish_mode"] = values.instagram_publish_mode
     instagram_data["default_caption"] = values.instagram_caption.strip()
     instagram_data["account_id"] = values.instagram_account_id or None
+    instagram_data["delay_between_posts_enabled"] = values.instagram_delay_enabled
+    instagram_data["delay_between_posts_seconds"] = values.instagram_delay_seconds
+    instagram_data["maximum_delay_seconds"] = values.instagram_maximum_delay_seconds
 
     changed_data = {
         "collector.json": collector_data,
@@ -520,6 +582,10 @@ def _validate_ui_configuration_values(values: UiConfigurationValues) -> None:
         raise ValueError("Instagram caption must not be blank.")
     if values.instagram_account_id is not None and not values.instagram_account_id.strip():
         raise ValueError("Instagram account ID must be a non-empty string or blank.")
+    if values.instagram_delay_seconds < 0 or values.instagram_maximum_delay_seconds < 0:
+        raise ValueError("Instagram post spacing values must be zero or greater.")
+    if values.instagram_delay_seconds > values.instagram_maximum_delay_seconds:
+        raise ValueError("Instagram post spacing cannot exceed its configured maximum.")
 
 
 def _validate_config_changes(

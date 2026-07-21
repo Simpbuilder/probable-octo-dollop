@@ -4,8 +4,12 @@ from .history import append_post_history, load_post_history
 from .instagram_uploader import (
     InstagramAccountSelectionError,
     InstagramUploader,
+    UploadProgress,
+    UploadProgressCallback,
     UploadSummary,
+    estimate_batch_duration,
     resolve_instagram_account,
+    resolve_post_delay,
 )
 from .models import ZernioAccount, ZernioPostResult
 from .zernio_client import (
@@ -22,9 +26,13 @@ __all__ = [
     "create_zernio_client",
     "InstagramAccountSelectionError",
     "InstagramUploader",
+    "UploadProgress",
+    "UploadProgressCallback",
+    "estimate_batch_duration",
     "load_post_history",
     "load_zernio_api_key",
     "resolve_instagram_account",
+    "resolve_post_delay",
     "UploadSummary",
     "ZernioAccount",
     "ZernioClientError",

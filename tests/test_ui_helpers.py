@@ -107,6 +107,9 @@ class UiHelperTests(unittest.TestCase):
                 instagram_caption="Fixed caption",
                 instagram_account_id="account-1",
                 automatic_hook_selection=True,
+                instagram_delay_enabled=True,
+                instagram_delay_seconds=60,
+                instagram_maximum_delay_seconds=300,
             )
 
             save_ui_configuration(root, values)
@@ -118,6 +121,7 @@ class UiHelperTests(unittest.TestCase):
             self.assertEqual(config.instagram_config.maximum_uploads_per_run, 10)
             self.assertEqual(config.instagram_config.account_id, "account-1")
             self.assertTrue(config.hook_generation_config.automatic_selection)
+            self.assertEqual(config.instagram_config.delay_between_posts_seconds, 60)
             self.assertEqual((root / "config" / "sources.json").read_text(encoding="utf-8"), original_sources)
 
             invalid_values = replace(values, uploads_per_run=0)

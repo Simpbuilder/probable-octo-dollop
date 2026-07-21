@@ -26,6 +26,7 @@ from ui_helpers import (
     reject_review_candidates,
     run_confirmed_cleanup,
     run_manual_import,
+    run_instagram_upload_action,
     run_pipeline_action,
     save_review_custom_hook,
     save_ui_configuration,
@@ -262,7 +263,7 @@ def _render_pipeline_actions(progress: PipelineProgress, instagram: InstagramOve
             disabled=not instagram.pending_uploads,
             width="stretch",
         ):
-            _run_pipeline(["--upload-instagram", "--all"])
+            _run_instagram_upload(upload_one=False, process_all=True, publish_now=False)
 
 
 def _render_add_clips(progress: PipelineProgress) -> None:
@@ -454,9 +455,51 @@ def _render_instagram(config: CollectorConfig, instagram: InstagramOverview) -> 
                     ("draft", "publish_now"),
                     index=0 if values.instagram_publish_mode == "draft" else 1,
                 )
+                spacing_enabled = st.checkbox(
+                    "Space successful posts",
+                    value=values.instagram_delay_enabled,
+                )
+                presets = {
+                    "No delay": 0,
+                    "15 seconds": 15,
+                    "30 seconds": 30,
+                    "60 seconds": 60,
+                    "2 minutes": 120,
+                    "5 minutes": 300,
+                    "Custom": None,
+                }
+                selected_preset = next(
+                    (label for label, seconds in presets.items() if seconds == values.instagram_delay_seconds),
+                    "Custom",
+                )
+                spacing_preset = st.selectbox(
+                    "Delay preset",
+                    tuple(presets),
+                    index=tuple(presets).index(selected_preset),
+                    disabled=not spacing_enabled,
+                )
+                if spacing_preset == "Custom":
+                    spacing_seconds = int(st.number_input(
+                        "Custom delay (seconds)",
+                        min_value=0,
+                        max_value=values.instagram_maximum_delay_seconds,
+                        value=min(values.instagram_delay_seconds, values.instagram_maximum_delay_seconds),
+                        disabled=not spacing_enabled,
+                    ))
+                else:
+                    spacing_seconds = presets[spacing_preset] or 0
+                effective_delay = spacing_seconds if spacing_enabled else 0
+                estimated_seconds = max(0, instagram.pending_uploads - 1) * effective_delay
+                st.caption(f"Estimated batch spacing: {_format_duration(estimated_seconds)}")
                 saved = st.form_submit_button("Save Instagram settings", type="primary", width="stretch")
             if saved:
-                _save_configuration(replace(values, instagram_caption=caption, instagram_publish_mode=publish_mode))
+                _save_configuration(replace(
+                    values,
+                    instagram_caption=caption,
+                    instagram_publish_mode=publish_mode,
+                    instagram_delay_enabled=spacing_enabled,
+                    instagram_delay_seconds=spacing_seconds,
+                ))
     with right:
         with st.container(border=True):
             st.subheader("Upload history", anchor=False)
@@ -469,7 +512,7 @@ def _render_instagram(config: CollectorConfig, instagram: InstagramOverview) -> 
                 disabled=not instagram.pending_uploads,
                 width="stretch",
             ):
-                _run_pipeline(["--upload-instagram", "--all"])
+                _run_instagram_upload(upload_one=False, process_all=True, publish_now=False)
 
     with st.container(border=True):
         st.subheader("Publish immediately", anchor=False)
@@ -485,14 +528,14 @@ def _render_instagram(config: CollectorConfig, instagram: InstagramOverview) -> 
             disabled=not confirmed or not instagram.pending_uploads,
             width="stretch",
         ):
-            _run_pipeline(["--upload-one-instagram", "--publish-now"])
+            _run_instagram_upload(upload_one=True, process_all=False, publish_now=True)
         if publish_all.button(
             "Publish all now",
             icon=":material/publish:",
             disabled=not confirmed or not instagram.pending_uploads,
             width="stretch",
         ):
-            _run_pipeline(["--upload-instagram", "--all", "--publish-now"])
+            _run_instagram_upload(upload_one=False, process_all=True, publish_now=True)
 
 
 def _render_cleanup_controls() -> None:
@@ -604,8 +647,63 @@ def _render_settings(config: CollectorConfig) -> None:
                 instagram_caption=caption,
                 instagram_account_id=account_id.strip() or None,
                 automatic_hook_selection=automatic_selection,
+                instagram_delay_enabled=values.instagram_delay_enabled,
+                instagram_delay_seconds=values.instagram_delay_seconds,
+                instagram_maximum_delay_seconds=values.instagram_maximum_delay_seconds,
             )
         )
+
+
+def _run_instagram_upload(
+    *,
+    upload_one: bool,
+    process_all: bool,
+    publish_now: bool,
+) -> None:
+    """Run one existing upload batch while rendering its optional local spacing countdown."""
+    status = st.status("Preparing Instagram upload batch...", expanded=True)
+    current = status.empty()
+    countdown = status.empty()
+    progress_bar = status.progress(0)
+
+    def show_progress(update: object) -> bool:
+        phase = getattr(update, "phase")
+        current_file = getattr(update, "current_file")
+        posted = getattr(update, "successful_posts")
+        remaining = getattr(update, "remaining_posts")
+        total = max(1, getattr(update, "total_posts"))
+        filename = current_file.name if current_file is not None else "next file"
+        current.write(f"Current file: `{filename}` | Posted: {posted} | Remaining: {remaining}")
+        if phase == "waiting":
+            seconds = getattr(update, "delay_remaining_seconds")
+            countdown.info(f"Next upload in {seconds} second(s).", icon=":material/schedule:")
+            progress_bar.progress(min(1.0, posted / total))
+        else:
+            countdown.empty()
+            progress_bar.progress(min(1.0, posted / total))
+        return True
+
+    result = run_instagram_upload_action(
+        PROJECT_ROOT,
+        upload_one=upload_one,
+        process_all=process_all,
+        publish_now=publish_now,
+        progress_callback=show_progress,
+    )
+    status.update(
+        label="Instagram upload completed" if result.exit_code == 0 else "Instagram upload finished with errors",
+        state="complete" if result.exit_code == 0 else "error",
+        expanded=result.exit_code != 0,
+    )
+    _remember_pipeline_result(result)
+
+
+def _format_duration(seconds: int) -> str:
+    """Render a compact human-readable spacing estimate for local batch controls."""
+    minutes, remaining_seconds = divmod(max(0, seconds), 60)
+    if minutes:
+        return f"{minutes}m {remaining_seconds}s"
+    return f"{remaining_seconds}s"
 
 
 def _render_logs_and_errors(config: CollectorConfig) -> None:

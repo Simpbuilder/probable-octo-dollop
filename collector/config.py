@@ -324,6 +324,24 @@ def _parse_instagram_config(
             duplicate_check_enabled=_required_bool(
                 data, "duplicate_check_enabled", "instagram.json"
             ),
+            delay_between_posts_enabled=_optional_bool(
+                data,
+                "delay_between_posts_enabled",
+                "instagram.json",
+                default=True,
+            ),
+            delay_between_posts_seconds=_optional_nonnegative_int(
+                data,
+                "delay_between_posts_seconds",
+                "instagram.json",
+                default=30,
+            ),
+            maximum_delay_seconds=_optional_nonnegative_int(
+                data,
+                "maximum_delay_seconds",
+                "instagram.json",
+                default=300,
+            ),
         )
     except ValueError as error:
         raise ConfigurationError(f"Invalid Instagram uploader settings: {error}") from error

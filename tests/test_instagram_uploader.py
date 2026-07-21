@@ -17,7 +17,9 @@ from publisher.history import append_post_history, build_post_history_record, lo
 from publisher.instagram_uploader import (
     InstagramAccountSelectionError,
     InstagramUploader,
+    estimate_batch_duration,
     resolve_instagram_account,
+    resolve_post_delay,
 )
 from publisher.models import ZernioAccount, ZernioPostResult, ZernioPresignedMedia
 from publisher.zernio_client import (
@@ -300,6 +302,7 @@ class InstagramUploaderTests(unittest.TestCase):
             maximum_uploads_per_run=maximum_uploads,
             posted_directory=(root / "clips" / "posted").resolve(),
             duplicate_check_enabled=True,
+            delay_between_posts_enabled=False,
         )
         return root, files, metadata_file, config
 
@@ -309,6 +312,7 @@ class InstagramUploaderTests(unittest.TestCase):
         root: Path,
         config: InstagramConfig,
         client: FakeZernioClient,
+        sleep_func=None,
     ) -> InstagramUploader:
         """Build the production queue orchestrator with the local fake client."""
         return InstagramUploader(
@@ -316,6 +320,7 @@ class InstagramUploaderTests(unittest.TestCase):
             history_file=root / "metadata" / "zernio_post_history.json",
             config=config,
             client=client,
+            **({"sleep_func": sleep_func} if sleep_func is not None else {}),
         )
 
     def test_single_account_is_selected_but_multiple_accounts_require_configuration(self) -> None:
@@ -430,6 +435,84 @@ class InstagramUploaderTests(unittest.TestCase):
         self.assertEqual(all_summary.remaining, 0)
         self.assertEqual(all_summary.drafts, 3)
 
+    def test_spacing_waits_only_between_successful_posts(self) -> None:
+        """Only the space between two successful posts is intentionally delayed."""
+        root, _, metadata_file, config = self.make_environment(
+            ["one.mp4", "two.mp4"], maximum_uploads=2
+        )
+        config = replace(config, delay_between_posts_enabled=True)
+        sleeps: list[float] = []
+
+        summary = self.make_uploader(
+            metadata_file, root, config, FakeZernioClient(), sleeps.append
+        ).run()
+
+        self.assertEqual(summary.drafts, 2)
+        self.assertEqual(sleeps, [30])
+
+    def test_zero_delay_duplicates_and_failed_uploads_do_not_wait(self) -> None:
+        """Skipped duplicate and failed files never manufacture a spacing delay."""
+        root, files, metadata_file, config = self.make_environment(
+            ["already.mp4", "bad.mp4", "good.mp4"], maximum_uploads=3
+        )
+        append_post_history(
+            root / "metadata" / "zernio_post_history.json",
+            build_post_history_record(
+                post_id="old-post", status="draft", account_id=ACCOUNT.account_id,
+                filename=files[0].name, public_media_url="https://media.example/already.mp4",
+                publish_mode="draft",
+            ),
+        )
+        sleeps: list[float] = []
+
+        summary = self.make_uploader(
+            metadata_file,
+            root,
+            replace(config, delay_between_posts_seconds=0),
+            FakeZernioClient(upload_failures={"bad.mp4"}),
+            sleeps.append,
+        ).run()
+
+        self.assertEqual(summary.duplicates, 1)
+        self.assertEqual(summary.failed, 1)
+        self.assertEqual(summary.drafts, 1)
+        self.assertEqual(sleeps, [])
+
+    def test_delay_override_is_capped_and_batch_duration_is_estimated(self) -> None:
+        """The configured delay applies by default and an override cannot exceed the cap."""
+        root, _, metadata_file, config = self.make_environment(
+            ["one.mp4", "two.mp4"], maximum_uploads=2
+        )
+        config = replace(
+            config,
+            delay_between_posts_enabled=True,
+            delay_between_posts_seconds=15,
+            maximum_delay_seconds=45,
+        )
+        sleeps: list[float] = []
+
+        self.make_uploader(
+            metadata_file, root, config, FakeZernioClient(), sleeps.append
+        ).run(post_delay_override=90)
+
+        self.assertEqual(resolve_post_delay(config, None), 15)
+        self.assertEqual(resolve_post_delay(config, 90), 45)
+        self.assertEqual(estimate_batch_duration(3, 45), 90)
+        self.assertEqual(estimate_batch_duration(1, 45), 0)
+        self.assertEqual(sleeps, [45])
+
+    def test_negative_delay_is_rejected_before_any_post(self) -> None:
+        """Invalid override values fail locally without sending media to Zernio."""
+        root, _, metadata_file, config = self.make_environment(["one.mp4"])
+        client = FakeZernioClient()
+
+        summary = self.make_uploader(metadata_file, root, config, client).run(
+            post_delay_override=-1
+        )
+
+        self.assertEqual(summary.failed, 1)
+        self.assertEqual(client.post_calls, [])
+
     def test_plain_ready_files_are_never_scanned_for_instagram_upload(self) -> None:
         """The uploader's source boundary excludes ready/plain and all other pipeline folders."""
         root, _, metadata_file, config = self.make_environment(["hooked.mp4"])
@@ -477,6 +560,18 @@ class ZernioRunnerTests(unittest.TestCase):
         uploader.assert_called_once()
         self.assertTrue(uploader.call_args.kwargs["process_all"])
         intake.assert_not_called()
+
+    def test_post_delay_is_routed_and_negative_values_fail_locally(self) -> None:
+        """One-run spacing reaches the uploader and negative values are rejected early."""
+        with patch("run_pipeline.load_collector_config", return_value=object()), patch(
+            "run_pipeline.run_instagram_uploader", return_value=0
+        ) as uploader:
+            self.assertEqual(
+                run_pipeline_main(["--upload-instagram", "--all", "--post-delay", "60"]), 0
+            )
+            self.assertEqual(run_pipeline_main(["--upload-instagram", "--post-delay", "-1"]), 2)
+
+        self.assertEqual(uploader.call_args.kwargs["post_delay"], 60)
 
     def test_account_listing_output_shows_safe_account_details_only(self) -> None:
         """The listing exposes account selection values but never includes an API key."""

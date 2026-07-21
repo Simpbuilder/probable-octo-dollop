@@ -32,6 +32,7 @@ from hook_generator import (
 )
 from publisher import (
     InstagramUploader,
+    UploadProgressCallback,
     UploadSummary,
     ZernioClientError,
     create_zernio_client,
@@ -122,6 +123,12 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
         "--publish-now",
         action="store_true",
         help="Publish an explicit Instagram upload immediately instead of creating a draft.",
+    )
+    parser.add_argument(
+        "--post-delay",
+        type=int,
+        metavar="SECONDS",
+        help="Override Instagram spacing between successful posts for this upload run.",
     )
     parser.add_argument(
         "--cleanup",
@@ -462,6 +469,8 @@ def run_instagram_uploader(
     upload_one: bool,
     process_all: bool,
     publish_now: bool,
+    post_delay: int | None = None,
+    progress_callback: UploadProgressCallback | None = None,
 ) -> int:
     """Run the explicit hooked-Reel uploader without adding it to normal pipeline execution."""
     if config.instagram_config is None:
@@ -485,6 +494,8 @@ def run_instagram_uploader(
         process_all=process_all,
         maximum_uploads_override=1 if upload_one else None,
         publish_now_override=True if publish_now else None,
+        post_delay_override=post_delay,
+        progress_callback=progress_callback,
     )
     print_instagram_upload_summary(summary)
     return 1 if summary.failed else 0
@@ -551,6 +562,12 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if parsed_arguments.publish_now and not upload_requested:
         print("Pipeline not started: --publish-now requires an Instagram upload command.")
         return 2
+    if parsed_arguments.post_delay is not None and not upload_requested:
+        print("Pipeline not started: --post-delay requires an Instagram upload command.")
+        return 2
+    if parsed_arguments.post_delay is not None and parsed_arguments.post_delay < 0:
+        print("Pipeline not started: --post-delay must be zero or greater.")
+        return 2
     if parsed_arguments.list_zernio_accounts and upload_requested:
         print("Pipeline not started: --list-zernio-accounts cannot be combined with an upload command.")
         return 2
@@ -589,6 +606,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             upload_one=parsed_arguments.upload_one_instagram,
             process_all=parsed_arguments.all,
             publish_now=parsed_arguments.publish_now,
+            post_delay=parsed_arguments.post_delay,
         )
 
     if parsed_arguments.debug_hook_flow is not None:

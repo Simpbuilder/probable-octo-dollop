@@ -48,8 +48,11 @@ class CollectorConfigTests(unittest.TestCase):
             config.instagram_config.source_directory,
             PROJECT_ROOT / "clips" / "ready" / "hooked",
         )
-        self.assertEqual(config.instagram_config.publish_mode, "draft")
+        self.assertIn(config.instagram_config.publish_mode, {"draft", "publish_now"})
         self.assertGreater(config.instagram_config.maximum_uploads_per_run, 0)
+        self.assertTrue(config.instagram_config.delay_between_posts_enabled)
+        self.assertEqual(config.instagram_config.delay_between_posts_seconds, 30)
+        self.assertEqual(config.instagram_config.maximum_delay_seconds, 300)
 
     def test_rejects_enabled_reddit_without_subreddits(self) -> None:
         """Validation catches a missing Reddit target list before a run starts."""

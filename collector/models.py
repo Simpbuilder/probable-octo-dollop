@@ -374,6 +374,9 @@ class InstagramConfig:
     move_after_upload: bool = False
     posted_directory: Path = Path("clips/posted")
     duplicate_check_enabled: bool = True
+    delay_between_posts_enabled: bool = True
+    delay_between_posts_seconds: int = 30
+    maximum_delay_seconds: int = 300
 
     def __post_init__(self) -> None:
         """Validate upload safety settings before local files can be sent remotely."""
@@ -391,6 +394,14 @@ class InstagramConfig:
             raise ValueError("instagram maximum_uploads_per_run must be greater than zero.")
         if self.delete_after_upload and self.move_after_upload:
             raise ValueError("instagram cannot delete and move the same uploaded file.")
+        if self.delay_between_posts_seconds < 0:
+            raise ValueError("instagram delay_between_posts_seconds must be zero or greater.")
+        if self.maximum_delay_seconds < 0:
+            raise ValueError("instagram maximum_delay_seconds must be zero or greater.")
+        if self.delay_between_posts_seconds > self.maximum_delay_seconds:
+            raise ValueError(
+                "instagram delay_between_posts_seconds cannot exceed maximum_delay_seconds."
+            )
 
 
 @dataclass(frozen=True, slots=True)

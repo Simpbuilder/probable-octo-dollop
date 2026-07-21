@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from dataclasses import replace
 from pathlib import Path
 import logging
 import shutil
+import time
 
 from collector.file_utils import ensure_path_is_within_directory
 from collector.models import ClipMetadata, InstagramConfig
@@ -41,6 +42,41 @@ class UploadSummary:
     duplicates: int = 0
     skipped: int = 0
     failed: int = 0
+    stopped: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class UploadProgress:
+    """One optional local progress update emitted during an explicit upload batch."""
+
+    phase: str
+    current_file: Path | None
+    successful_posts: int
+    remaining_posts: int
+    total_posts: int
+    delay_remaining_seconds: int = 0
+
+
+UploadProgressCallback = Callable[[UploadProgress], bool | None]
+
+
+def resolve_post_delay(config: InstagramConfig, override: int | None) -> int:
+    """Return the enabled configured delay or a capped explicit override for one batch."""
+    requested_delay = (
+        override
+        if override is not None
+        else config.delay_between_posts_seconds if config.delay_between_posts_enabled else 0
+    )
+    if requested_delay < 0:
+        raise ValueError("post delay must be zero or greater.")
+    return min(requested_delay, config.maximum_delay_seconds)
+
+
+def estimate_batch_duration(post_count: int, post_delay_seconds: int) -> int:
+    """Estimate only intentional spacing time, excluding the variable Zernio request duration."""
+    if post_count <= 1 or post_delay_seconds <= 0:
+        return 0
+    return (post_count - 1) * post_delay_seconds
 
 
 def resolve_instagram_account(
@@ -83,6 +119,7 @@ class InstagramUploader:
         config: InstagramConfig,
         client: ZernioClientProtocol,
         logger: logging.Logger | None = None,
+        sleep_func: Callable[[float], None] = time.sleep,
     ) -> None:
         """Set up local state, strict source paths, and an injectable Zernio client."""
         self._metadata_file = Path(metadata_file)
@@ -90,6 +127,7 @@ class InstagramUploader:
         self._config = config
         self._client = client
         self._logger = logger or logging.getLogger(__name__)
+        self._sleep_func = sleep_func
 
     def run(
         self,
@@ -97,9 +135,17 @@ class InstagramUploader:
         process_all: bool = False,
         maximum_uploads_override: int | None = None,
         publish_now_override: bool | None = None,
+        post_delay_override: int | None = None,
+        progress_callback: UploadProgressCallback | None = None,
     ) -> UploadSummary:
         """Create Zernio draft or immediate Reel posts without stopping after one failure."""
         summary = UploadSummary()
+        try:
+            post_delay_seconds = resolve_post_delay(self._config, post_delay_override)
+        except ValueError as error:
+            self._logger.error("Instagram uploader could not start: %s", error)
+            summary.failed = 1
+            return summary
         if not self._config.enabled:
             self._logger.error("Instagram uploads are disabled in config/instagram.json.")
             summary.failed = 1
@@ -143,14 +189,51 @@ class InstagramUploader:
             if publish_now_override is not None
             else self._config.publish_mode == "publish_now"
         )
-        for video_file in eligible_files[: summary.processing]:
-            self._upload_one(
+        processing_files = eligible_files[: summary.processing]
+        for index, video_file in enumerate(processing_files):
+            if not self._emit_progress(
+                progress_callback,
+                phase="uploading",
+                current_file=video_file,
+                summary=summary,
+                remaining_posts=len(processing_files) - index,
+                total_posts=len(processing_files),
+            ):
+                summary.stopped = True
+                summary.remaining += len(processing_files) - index
+                break
+            succeeded = self._upload_one(
                 video_file,
                 account,
                 clips_by_path,
                 publish_now=publish_now,
                 summary=summary,
             )
+            remaining_posts = len(processing_files) - index - 1
+            if succeeded:
+                if not self._emit_progress(
+                    progress_callback,
+                    phase="posted",
+                    current_file=video_file,
+                    summary=summary,
+                    remaining_posts=remaining_posts,
+                    total_posts=len(processing_files),
+                ):
+                    summary.stopped = True
+                    summary.remaining += remaining_posts
+                    break
+            if succeeded and remaining_posts and post_delay_seconds:
+                if not self._wait_between_posts(
+                    post_delay_seconds,
+                    current_file=video_file,
+                    summary=summary,
+                    remaining_posts=remaining_posts,
+                    total_posts=len(processing_files),
+                    progress_callback=progress_callback,
+                ):
+                    summary.stopped = True
+                    summary.remaining += remaining_posts
+                    break
         return summary
 
     def _hooked_mp4_files(self) -> list[Path]:
@@ -206,7 +289,7 @@ class InstagramUploader:
         *,
         publish_now: bool,
         summary: UploadSummary,
-    ) -> None:
+    ) -> bool:
         """Upload one local MP4, create its Reel post, then record durable local history."""
         try:
             media = self._client.request_presigned_media(video_file)
@@ -235,12 +318,71 @@ class InstagramUploader:
                 summary.published += 1
             else:
                 summary.drafts += 1
+            return True
         except (ZernioClientError, OSError, ValueError) as error:
             summary.failed += 1
             self._logger.error("Instagram upload failed for %s: %s", video_file.name, error)
         except Exception as error:
             summary.failed += 1
             self._logger.exception("Unexpected Instagram upload failure for %s", video_file.name)
+        return False
+
+    def _wait_between_posts(
+        self,
+        delay_seconds: int,
+        *,
+        current_file: Path,
+        summary: UploadSummary,
+        remaining_posts: int,
+        total_posts: int,
+        progress_callback: UploadProgressCallback | None,
+    ) -> bool:
+        """Wait only after a successful post, using one-second updates when a UI callback is present."""
+        self._logger.info(
+            "Waiting %s seconds before the next Instagram post after %s.",
+            delay_seconds,
+            current_file.name,
+        )
+        if progress_callback is None:
+            self._sleep_func(delay_seconds)
+            return True
+        for remaining_seconds in range(delay_seconds, 0, -1):
+            if not self._emit_progress(
+                progress_callback,
+                phase="waiting",
+                current_file=current_file,
+                summary=summary,
+                remaining_posts=remaining_posts,
+                total_posts=total_posts,
+                delay_remaining_seconds=remaining_seconds,
+            ):
+                return False
+            self._sleep_func(1)
+        return True
+
+    @staticmethod
+    def _emit_progress(
+        progress_callback: UploadProgressCallback | None,
+        *,
+        phase: str,
+        current_file: Path | None,
+        summary: UploadSummary,
+        remaining_posts: int,
+        total_posts: int,
+        delay_remaining_seconds: int = 0,
+    ) -> bool:
+        """Notify optional local presenters without coupling the reusable queue to Streamlit."""
+        if progress_callback is None:
+            return True
+        update = UploadProgress(
+            phase=phase,
+            current_file=current_file,
+            successful_posts=summary.drafts + summary.published,
+            remaining_posts=remaining_posts,
+            total_posts=total_posts,
+            delay_remaining_seconds=delay_remaining_seconds,
+        )
+        return progress_callback(update) is not False
 
     def _finalize_local_file(self, video_file: Path) -> Path:
         """Optionally move or delete after the durable upload record is saved; default is unchanged."""
