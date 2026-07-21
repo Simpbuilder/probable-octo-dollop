@@ -9,6 +9,7 @@ from pathlib import Path
 
 from collector.models import ClipMetadata, DownloaderConfig
 from collector.storage import load_all_clip_metadata, update_clip_metadata
+from pipeline_runtime import QueueProgress, QueueProgressCallback
 
 from .models import DownloadRequest, DownloadResult, DownloadSummary, MediaInspection
 from .utils import (
@@ -40,7 +41,12 @@ class PendingClipDownloader:
         self._ffmpeg_available = ffmpeg_available or is_ffmpeg_available
         self._logger = logger or logging.getLogger(__name__)
 
-    def run(self, *, process_all: bool = False) -> DownloadSummary:
+    def run(
+        self,
+        *,
+        process_all: bool = False,
+        progress_callback: QueueProgressCallback | None = None,
+    ) -> DownloadSummary:
         """Download eligible pending clips, respecting the configured limit unless overridden."""
         summary = DownloadSummary()
         try:
@@ -58,9 +64,55 @@ class PendingClipDownloader:
             len(eligible_clips), self._config.downloads_per_run
         )
         summary.remaining = summary.eligible - summary.processing
-        for clip in eligible_clips[: summary.processing]:
+        processing_clips = eligible_clips[: summary.processing]
+        for index, clip in enumerate(processing_clips):
+            if not self._emit_progress(
+                progress_callback,
+                clip,
+                summary,
+                total=len(processing_clips),
+                remaining=len(processing_clips) - index,
+                message="Starting download.",
+            ):
+                summary.remaining += len(processing_clips) - index
+                break
             self._process_clip(clip, summary)
+            if not self._emit_progress(
+                progress_callback,
+                clip,
+                summary,
+                total=len(processing_clips),
+                remaining=len(processing_clips) - index - 1,
+                message="Download item completed.",
+            ):
+                summary.remaining += len(processing_clips) - index - 1
+                break
         return summary
+
+    @staticmethod
+    def _emit_progress(
+        callback: QueueProgressCallback | None,
+        clip: ClipMetadata,
+        summary: DownloadSummary,
+        *,
+        total: int,
+        remaining: int,
+        message: str,
+    ) -> bool:
+        """Publish an item boundary without coupling downloads to a specific UI."""
+        if callback is None:
+            return True
+        return callback(
+            QueueProgress(
+                stage="Download",
+                current_item=clip.unique_id,
+                completed_count=summary.downloaded + summary.skipped,
+                total_count=total,
+                failed_count=summary.failed,
+                remaining_count=remaining,
+                message=message,
+            )
+        ) is not False
 
     def _process_clip(self, clip: ClipMetadata, summary: DownloadSummary) -> None:
         """Handle one pending clip and record a recoverable state on every failure."""

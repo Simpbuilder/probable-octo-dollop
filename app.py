@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -28,9 +29,13 @@ from ui_helpers import (
     run_manual_import,
     run_instagram_upload_action,
     run_pipeline_action,
+    load_runtime_status,
+    request_background_job_stop,
+    resolve_auto_refresh_interval,
     save_review_custom_hook,
     save_ui_configuration,
     select_review_candidate,
+    start_background_pipeline_job,
 )
 
 if TYPE_CHECKING:
@@ -67,10 +72,11 @@ def main() -> None:
         st.error(f"Local pipeline status is unavailable: {error}", icon=":material/error:")
         return
 
-    page = _render_sidebar(config, counts, instagram)
+    page, refresh_interval = _render_sidebar(config, counts, instagram)
     _render_header(counts)
+    _render_live_job_banner(refresh_interval)
     if page == "Dashboard":
-        _render_dashboard(counts, progress, instagram)
+        _render_live_dashboard(refresh_interval)
     elif page == "Add Clips":
         _render_add_clips(progress)
     elif page == "Hooks":
@@ -100,7 +106,7 @@ def _render_sidebar(
     config: CollectorConfig,
     counts: DashboardCounts,
     instagram: InstagramOverview,
-) -> str:
+) -> tuple[str, int | None]:
     """Keep global navigation and compact configuration context out of the main workspace."""
     with st.sidebar:
         st.title("Viral clip pipeline")
@@ -122,7 +128,17 @@ def _render_sidebar(
             st.caption(f"Default upload mode: {instagram.publish_mode}")
             st.caption(f"Download limit: {config.downloader_config.downloads_per_run if config.downloader_config else 'n/a'}")
             st.caption(f"Format limit: {config.formatter_config.maximum_clips_per_run if config.formatter_config else 'n/a'}")
-    return page
+        refresh_options = ("1 second", "2 seconds", "5 seconds", "Off")
+        saved_refresh = st.session_state.get("refresh_selection", "2 seconds")
+        if saved_refresh not in refresh_options:
+            saved_refresh = "2 seconds"
+        selected_refresh = st.selectbox(
+            "Live refresh",
+            refresh_options,
+            index=refresh_options.index(saved_refresh),
+            key="refresh_selection",
+        )
+    return page, resolve_auto_refresh_interval(selected_refresh, load_runtime_status(PROJECT_ROOT))
 
 
 def _render_header(counts: DashboardCounts) -> None:
@@ -138,6 +154,86 @@ def _render_header(counts: DashboardCounts) -> None:
             st.badge("Pipeline active", icon=":material/pending:", color="orange")
         else:
             st.badge("Ready", icon=":material/check_circle:", color="green")
+
+
+def _render_live_job_banner(refresh_interval: int | None) -> None:
+    """Refresh a compact active-job banner on every page without rebuilding forms or navigation."""
+    status = load_runtime_status(PROJECT_ROOT)
+
+    @st.fragment(run_every=refresh_interval if status.is_active and refresh_interval else None)
+    def live_banner() -> None:
+        current = load_runtime_status(PROJECT_ROOT)
+        if not current.is_active:
+            if current.status in {"completed", "failed", "cancelled"}:
+                st.caption(f"Last batch: {current.last_message}")
+            return
+        with st.container(border=True):
+            headline, stop = st.columns((5, 1), vertical_alignment="center")
+            headline.markdown(f"**Running: {current.stage or 'Pipeline action'}**")
+            if stop.button("Stop", icon=":material/stop:", key="stop-active-job", width="stretch"):
+                request_background_job_stop(PROJECT_ROOT)
+                st.rerun()
+            total = max(1, current.total_count)
+            st.progress(min(1.0, (current.completed_count + current.failed_count) / total))
+            st.caption(
+                f"Progress: {current.completed_count} / {current.total_count} | "
+                f"Failed: {current.failed_count} | Elapsed: {_elapsed_time(current.started_at)} | "
+                f"ETA: {_estimated_remaining(current)}"
+            )
+            if current.current_item:
+                st.caption(f"Current: `{current.current_item}`")
+            st.caption(current.last_message)
+
+    live_banner()
+
+
+def _render_live_dashboard(refresh_interval: int | None) -> None:
+    """Keep dashboard counts fresh during a worker run while idle pages avoid polling."""
+    status = load_runtime_status(PROJECT_ROOT)
+
+    @st.fragment(run_every=refresh_interval if status.is_active and refresh_interval else None)
+    def live_dashboard() -> None:
+        try:
+            config = load_collector_config(PROJECT_ROOT / "config")
+            counts = load_dashboard_counts(PROJECT_ROOT)
+            progress = load_pipeline_progress(config, counts)
+            instagram = load_instagram_overview(config)
+        except (ConfigurationError, OSError, ValueError) as error:
+            st.error(f"Dashboard status could not be refreshed: {error}", icon=":material/error:")
+            return
+        _render_dashboard(counts, progress, instagram)
+
+    live_dashboard()
+
+
+def _elapsed_time(started_at: str | None) -> str:
+    """Format active-job elapsed time without trusting malformed temporary status values."""
+    if started_at is None:
+        return "00:00"
+    try:
+        elapsed = max(0, int((datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds()))
+    except ValueError:
+        return "00:00"
+    minutes, seconds = divmod(elapsed, 60)
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _estimated_remaining(status: object) -> str:
+    """Estimate remaining queue time only after enough local progress exists to make it useful."""
+    started_at = getattr(status, "started_at", None)
+    completed = int(getattr(status, "completed_count", 0)) + int(
+        getattr(status, "failed_count", 0)
+    )
+    total = int(getattr(status, "total_count", 0))
+    if not started_at or completed <= 0 or total <= completed:
+        return "--"
+    try:
+        elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds())
+    except ValueError:
+        return "--"
+    remaining_seconds = round(elapsed / completed * (total - completed))
+    minutes, seconds = divmod(remaining_seconds, 60)
+    return f"{minutes:02d}:{seconds:02d}"
 
 
 def _render_dashboard(
@@ -212,6 +308,7 @@ def _render_dependency_status() -> None:
 
 def _render_pipeline_actions(progress: PipelineProgress, instagram: InstagramOverview) -> None:
     """Group existing CLI actions by workflow stage and disable empty queues."""
+    job_is_active = load_runtime_status(PROJECT_ROOT).is_active
     with st.container(border=True):
         st.subheader("Run pipeline", anchor=False)
         st.caption("Actions reuse the established CLI stages. Nothing publishes without an explicit confirmation.")
@@ -219,7 +316,7 @@ def _render_pipeline_actions(progress: PipelineProgress, instagram: InstagramOve
         if intake.button(
             "Import queued URLs",
             icon=":material/playlist_add:",
-            disabled=not progress.urls_to_import,
+            disabled=not progress.urls_to_import or job_is_active,
             width="stretch",
             type="primary",
         ):
@@ -227,25 +324,25 @@ def _render_pipeline_actions(progress: PipelineProgress, instagram: InstagramOve
         if download.button(
             "Download pending clips",
             icon=":material/download:",
-            disabled=not progress.downloads_to_run,
+            disabled=not progress.downloads_to_run or job_is_active,
             width="stretch",
             type="primary",
         ):
-            _run_pipeline(["--download", "--all"])
+            _start_background_job("download")
         if hooks.button(
             "Generate hooks",
             icon=":material/auto_awesome:",
-            disabled=not progress.hooks_to_generate,
+            disabled=not progress.hooks_to_generate or job_is_active,
             width="stretch",
             type="primary",
         ):
-            _run_pipeline(["--generate-hooks", "--all"])
+            _start_background_job("generate_hooks")
 
         review, format_column, upload = st.columns(3)
         review.button(
             "Review hooks",
             icon=":material/rate_review:",
-            disabled=not progress.hooks_to_review,
+            disabled=not progress.hooks_to_review or job_is_active,
             width="stretch",
             on_click=_set_navigation,
             args=("Hooks",),
@@ -253,17 +350,17 @@ def _render_pipeline_actions(progress: PipelineProgress, instagram: InstagramOve
         if format_column.button(
             "Format clips",
             icon=":material/movie:",
-            disabled=not progress.formats_to_run,
+            disabled=not progress.formats_to_run or job_is_active,
             width="stretch",
         ):
-            _run_pipeline(["--format", "--all"])
+            _start_background_job("format")
         if upload.button(
             "Upload drafts",
             icon=":material/upload:",
-            disabled=not instagram.pending_uploads,
+            disabled=not instagram.pending_uploads or job_is_active,
             width="stretch",
         ):
-            _run_instagram_upload(upload_one=False, process_all=True, publish_now=False)
+            _start_background_job("upload_drafts")
 
 
 def _render_add_clips(progress: PipelineProgress) -> None:
@@ -436,6 +533,7 @@ def _render_ready_videos(config: CollectorConfig) -> None:
 
 def _render_instagram(config: CollectorConfig, instagram: InstagramOverview) -> None:
     """Present connected-account context and explicit draft-first controls without remote calls."""
+    job_is_active = load_runtime_status(PROJECT_ROOT).is_active
     st.subheader("Instagram", anchor=False)
     account, mode, pending, history = st.columns(4)
     account.metric("Connected account", f"@{instagram.account_username or 'not configured'}", border=True)
@@ -509,10 +607,10 @@ def _render_instagram(config: CollectorConfig, instagram: InstagramOverview) -> 
                 "Upload all as drafts",
                 icon=":material/upload:",
                 type="primary",
-                disabled=not instagram.pending_uploads,
+                disabled=not instagram.pending_uploads or job_is_active,
                 width="stretch",
             ):
-                _run_instagram_upload(upload_one=False, process_all=True, publish_now=False)
+                _start_background_job("upload_drafts")
 
     with st.container(border=True):
         st.subheader("Publish immediately", anchor=False)
@@ -525,17 +623,17 @@ def _render_instagram(config: CollectorConfig, instagram: InstagramOverview) -> 
         if publish_one.button(
             "Publish next now",
             icon=":material/publish:",
-            disabled=not confirmed or not instagram.pending_uploads,
+            disabled=not confirmed or not instagram.pending_uploads or job_is_active,
             width="stretch",
         ):
             _run_instagram_upload(upload_one=True, process_all=False, publish_now=True)
         if publish_all.button(
             "Publish all now",
             icon=":material/publish:",
-            disabled=not confirmed or not instagram.pending_uploads,
+            disabled=not confirmed or not instagram.pending_uploads or job_is_active,
             width="stretch",
         ):
-            _run_instagram_upload(upload_one=False, process_all=True, publish_now=True)
+            _start_background_job("publish_now")
 
 
 def _render_cleanup_controls() -> None:
@@ -660,7 +758,10 @@ def _run_instagram_upload(
     process_all: bool,
     publish_now: bool,
 ) -> None:
-    """Run one existing upload batch while rendering its optional local spacing countdown."""
+    """Keep single-item upload controls synchronous; bulk controls use the persistent worker."""
+    if process_all:
+        _start_background_job("publish_now" if publish_now else "upload_drafts")
+        return
     status = st.status("Preparing Instagram upload batch...", expanded=True)
     current = status.empty()
     countdown = status.empty()
@@ -695,7 +796,7 @@ def _run_instagram_upload(
         state="complete" if result.exit_code == 0 else "error",
         expanded=result.exit_code != 0,
     )
-    _remember_pipeline_result(result)
+    _remember_pipeline_result(result.arguments, result.exit_code, result.output)
 
 
 def _format_duration(seconds: int) -> str:
@@ -754,6 +855,20 @@ def _run_pipeline(arguments: list[str]) -> None:
     """Run the existing CLI entry point and store only its terminal-style result for this UI session."""
     result = run_pipeline_action(arguments)
     _remember_pipeline_result(result.arguments, result.exit_code, result.output)
+
+
+def _start_background_job(job: str) -> None:
+    """Start one full-queue action once, then return control to Streamlit immediately."""
+    try:
+        status = start_background_pipeline_job(PROJECT_ROOT, job)
+    except (OSError, ValueError) as error:
+        st.error(f"Background job could not be started: {error}", icon=":material/error:")
+        return
+    if status.is_active:
+        st.session_state.pipeline_logs.append(
+            {"level": "Info", "message": f"Started background job: {status.stage}."}
+        )
+    st.rerun()
 
 
 def _run_manual_import() -> None:

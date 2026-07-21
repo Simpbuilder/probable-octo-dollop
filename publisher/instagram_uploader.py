@@ -54,6 +54,7 @@ class UploadProgress:
     successful_posts: int
     remaining_posts: int
     total_posts: int
+    failed_count: int = 0
     delay_remaining_seconds: int = 0
 
 
@@ -222,6 +223,17 @@ class InstagramUploader:
                     summary.stopped = True
                     summary.remaining += remaining_posts
                     break
+            elif not self._emit_progress(
+                progress_callback,
+                phase="failed",
+                current_file=video_file,
+                summary=summary,
+                remaining_posts=remaining_posts,
+                total_posts=len(processing_files),
+            ):
+                summary.stopped = True
+                summary.remaining += remaining_posts
+                break
             if succeeded and remaining_posts and post_delay_seconds:
                 if not self._wait_between_posts(
                     post_delay_seconds,
@@ -380,6 +392,7 @@ class InstagramUploader:
             successful_posts=summary.drafts + summary.published,
             remaining_posts=remaining_posts,
             total_posts=total_posts,
+            failed_count=summary.failed,
             delay_remaining_seconds=delay_remaining_seconds,
         )
         return progress_callback(update) is not False

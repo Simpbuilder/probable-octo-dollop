@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 
 from collector.models import ClipMetadata, FormatterConfig
 from collector.storage import load_all_clip_metadata, update_clip_metadata
+from pipeline_runtime import QueueProgress, QueueProgressCallback
 
 from .ffmpeg_client import FfmpegClientError, FfmpegClientProtocol
 from .hooks import (
@@ -50,6 +51,7 @@ class PendingClipFormatter:
         manual_hook: str | None = None,
         include_ready_for_manual_hook: bool = False,
         process_all: bool = False,
+        progress_callback: QueueProgressCallback | None = None,
     ) -> FormatSummary:
         """Format eligible downloads, optionally validating one explicit manual hook override."""
         summary = FormatSummary()
@@ -72,9 +74,47 @@ class PendingClipFormatter:
             len(eligible_clips), self._config.maximum_clips_per_run
         )
         summary.remaining = summary.eligible - summary.processing
-        for clip in eligible_clips[: summary.processing]:
+        processing_clips = eligible_clips[: summary.processing]
+        for index, clip in enumerate(processing_clips):
+            if not self._emit_progress(
+                progress_callback, clip, summary, total=len(processing_clips),
+                remaining=len(processing_clips) - index, message="Starting formatting."
+            ):
+                summary.remaining += len(processing_clips) - index
+                break
             self._process_clip(clip, summary, manual_hook=manual_hook)
+            if not self._emit_progress(
+                progress_callback, clip, summary, total=len(processing_clips),
+                remaining=len(processing_clips) - index - 1, message="Formatting item completed."
+            ):
+                summary.remaining += len(processing_clips) - index - 1
+                break
         return summary
+
+    @staticmethod
+    def _emit_progress(
+        callback: QueueProgressCallback | None,
+        clip: ClipMetadata,
+        summary: FormatSummary,
+        *,
+        total: int,
+        remaining: int,
+        message: str,
+    ) -> bool:
+        """Publish a safe cancellation boundary after each complete formatting item."""
+        if callback is None:
+            return True
+        return callback(
+            QueueProgress(
+                stage="Format",
+                current_item=clip.unique_id,
+                completed_count=summary.formatted + summary.skipped,
+                total_count=total,
+                failed_count=summary.failed,
+                remaining_count=remaining,
+                message=message,
+            )
+        ) is not False
 
     def _eligible_clips(
         self,

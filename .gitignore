@@ -21,6 +21,7 @@ logs/*
 
 # Generated metadata and local Zernio upload history
 metadata/*.json
+metadata/runtime_status.json
 metadata/processed_urls.txt
 !metadata/.gitkeep
 

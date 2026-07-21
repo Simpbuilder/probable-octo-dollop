@@ -279,6 +279,26 @@ The local Instagram page provides the same setting with presets, a custom
 seconds field, an estimated batch-spacing duration, and a visible countdown
 during multi-video uploads.
 
+## Live Dashboard Progress
+
+Bulk dashboard actions for download, hook generation, formatting, Instagram
+draft uploads, and immediate publishing run in one local background worker.
+The dashboard and active-job banner update after each completed item without
+blocking navigation or unsaved form values. The sidebar's **Live refresh**
+control defaults to **2 seconds** and also offers 1 second, 5 seconds, or Off;
+automatic refresh is active only while a batch is running. **Refresh status**
+remains available for a manual update.
+
+The active banner shows the stage, counts, current clip or file, failure count,
+latest message, elapsed time, and an estimate once enough items have completed.
+Use **Stop** to prevent the next item from starting. The current download,
+format, API request, or upload is allowed to finish safely, and completed work
+and retryable pending items are preserved.
+
+Runtime details live only in the ignored `metadata/runtime_status.json` file.
+It is written atomically and a missing or malformed file is treated as idle;
+stale active state is recovered safely when the local UI starts another job.
+
 To enable uploads, set `enabled` to `true`, review the account ID and caption,
 then create one Zernio draft from one finished hooked Reel:
 

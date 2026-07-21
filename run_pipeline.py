@@ -38,6 +38,7 @@ from publisher import (
     create_zernio_client,
     load_zernio_api_key,
 )
+from pipeline_runtime import QueueProgress, QueueProgressCallback
 from cleanup import run_cleanup_command
 
 from collector import (
@@ -345,7 +346,12 @@ def should_run_collectors(explicit_download: bool, explicit_format: bool) -> boo
     return not explicit_format or explicit_download
 
 
-def run_pending_clip_downloader(config: CollectorConfig, *, process_all: bool = False) -> int:
+def run_pending_clip_downloader(
+    config: CollectorConfig,
+    *,
+    process_all: bool = False,
+    progress_callback: QueueProgressCallback | None = None,
+) -> int:
     """Run the yt-dlp downloader and report missing dependencies without a traceback."""
     if config.downloader_config is None:
         print("Downloader not started: downloader configuration is missing.")
@@ -361,7 +367,7 @@ def run_pending_clip_downloader(config: CollectorConfig, *, process_all: bool = 
             metadata_file=config.metadata_file,
             config=config.downloader_config,
             media_client=media_client,
-    ).run(process_all=process_all)
+    ).run(process_all=process_all, progress_callback=progress_callback)
     except YtDlpClientError as error:
         print(f"Downloader not started: {error}")
         return 2
@@ -376,6 +382,7 @@ def run_pending_clip_formatter(
     manual_hook: str | None = None,
     include_ready_for_manual_hook: bool = False,
     process_all: bool = False,
+    progress_callback: QueueProgressCallback | None = None,
 ) -> int:
     """Run the FFmpeg formatter and report missing local tools without a traceback."""
     if config.formatter_config is None:
@@ -398,6 +405,7 @@ def run_pending_clip_formatter(
             manual_hook=manual_hook,
             include_ready_for_manual_hook=include_ready_for_manual_hook,
             process_all=process_all,
+            progress_callback=progress_callback,
         )
     except FfmpegDependencyError as error:
         print(f"Formatter not started: {error}")
@@ -415,6 +423,7 @@ def run_pending_hook_generator(
     *,
     force: bool = False,
     process_all: bool = False,
+    progress_callback: QueueProgressCallback | None = None,
 ) -> int:
     """Generate hook candidates from metadata without starting any media formatting stage."""
     if config.hook_generation_config is None:
@@ -431,7 +440,7 @@ def run_pending_hook_generator(
         metadata_file=config.metadata_file,
         config=config.hook_generation_config,
         client=client,
-    ).run(force=force, process_all=process_all)
+    ).run(force=force, process_all=process_all, progress_callback=progress_callback)
     print_hook_generation_summary(summary)
     return 1 if summary.failed else 0
 
@@ -471,6 +480,7 @@ def run_instagram_uploader(
     publish_now: bool,
     post_delay: int | None = None,
     progress_callback: UploadProgressCallback | None = None,
+    queue_progress_callback: QueueProgressCallback | None = None,
 ) -> int:
     """Run the explicit hooked-Reel uploader without adding it to normal pipeline execution."""
     if config.instagram_config is None:
@@ -485,6 +495,31 @@ def run_instagram_uploader(
         print(f"Instagram uploader not started: {error}")
         return 2
 
+    def relay_upload_progress(update: object) -> bool:
+        """Retain the existing upload callback while optionally exposing generic job status."""
+        continue_upload = True
+        if progress_callback is not None:
+            continue_upload = progress_callback(update) is not False
+        if queue_progress_callback is not None:
+            current_file = getattr(update, "current_file", None)
+            successful_posts = int(getattr(update, "successful_posts", 0))
+            total_posts = int(getattr(update, "total_posts", 0))
+            failed_count = int(getattr(update, "failed_count", 0))
+            phase = str(getattr(update, "phase", "uploading"))
+            message = "Waiting before the next upload." if phase == "waiting" else "Uploading Reel."
+            continue_upload = queue_progress_callback(
+                QueueProgress(
+                    stage="Publish Instagram" if publish_now else "Upload Instagram drafts",
+                    current_item=current_file.name if current_file is not None else None,
+                    completed_count=successful_posts,
+                    total_count=total_posts,
+                    failed_count=failed_count,
+                    remaining_count=int(getattr(update, "remaining_posts", 0)),
+                    message=message,
+                )
+            ) is not False and continue_upload
+        return continue_upload
+
     summary = InstagramUploader(
         metadata_file=config.metadata_file,
         history_file=config.output_path("metadata") / "zernio_post_history.json",
@@ -495,7 +530,7 @@ def run_instagram_uploader(
         maximum_uploads_override=1 if upload_one else None,
         publish_now_override=True if publish_now else None,
         post_delay_override=post_delay,
-        progress_callback=progress_callback,
+        progress_callback=(relay_upload_progress if progress_callback or queue_progress_callback else None),
     )
     print_instagram_upload_summary(summary)
     return 1 if summary.failed else 0
@@ -518,7 +553,11 @@ def _has_pipeline_stage_arguments(arguments: argparse.Namespace) -> bool:
     )
 
 
-def main(arguments: Sequence[str] | None = None) -> int:
+def main(
+    arguments: Sequence[str] | None = None,
+    *,
+    progress_callback: QueueProgressCallback | None = None,
+) -> int:
     """Load configuration and run the requested collection, download, and formatting stages."""
     configure_logging()
     parsed_arguments = parse_arguments(arguments)
@@ -607,6 +646,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             process_all=parsed_arguments.all,
             publish_now=parsed_arguments.publish_now,
             post_delay=parsed_arguments.post_delay,
+            queue_progress_callback=progress_callback,
         )
 
     if parsed_arguments.debug_hook_flow is not None:
@@ -620,12 +660,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if parsed_arguments.generate_hooks and not (
         parsed_arguments.download or format_requested
     ):
-        return run_pending_hook_generator(
-            config,
-            project_root,
-            force=parsed_arguments.force_hooks,
-            process_all=parsed_arguments.all,
-        )
+        generator_kwargs = {
+            "force": parsed_arguments.force_hooks,
+            "process_all": parsed_arguments.all,
+        }
+        if progress_callback is not None:
+            generator_kwargs["progress_callback"] = progress_callback
+        return run_pending_hook_generator(config, project_root, **generator_kwargs)
 
     exit_code = 0
     if should_run_collectors(parsed_arguments.download, format_requested):
@@ -642,35 +683,34 @@ def main(arguments: Sequence[str] | None = None) -> int:
         parsed_arguments.download,
         format_only=format_requested and not parsed_arguments.download,
     ):
-        exit_code = max(
-            exit_code,
-            run_pending_clip_downloader(config, process_all=parsed_arguments.all),
-        )
+        downloader_kwargs = {"process_all": parsed_arguments.all}
+        if progress_callback is not None:
+            downloader_kwargs["progress_callback"] = progress_callback
+        exit_code = max(exit_code, run_pending_clip_downloader(config, **downloader_kwargs))
     if parsed_arguments.generate_hooks or (
         not format_requested and should_run_hook_generation(config, explicit_generation=False)
     ):
+        generator_kwargs = {
+            "force": parsed_arguments.force_hooks,
+            "process_all": parsed_arguments.all,
+        }
+        if progress_callback is not None:
+            generator_kwargs["progress_callback"] = progress_callback
         exit_code = max(
-            exit_code,
-            run_pending_hook_generator(
-                config,
-                project_root,
-                force=parsed_arguments.force_hooks,
-                process_all=parsed_arguments.all,
-            ),
+            exit_code, run_pending_hook_generator(config, project_root, **generator_kwargs)
         )
     if should_run_formatter(config, format_requested):
-        exit_code = max(
-            exit_code,
-            run_pending_clip_formatter(
-                config,
-                maximum_clips_override=1 if parsed_arguments.format_one else None,
-                manual_hook=parsed_arguments.hook,
-                include_ready_for_manual_hook=(
-                    parsed_arguments.format_one and parsed_arguments.hook is not None
-                ),
-                process_all=parsed_arguments.all,
+        formatter_kwargs = {
+            "maximum_clips_override": 1 if parsed_arguments.format_one else None,
+            "manual_hook": parsed_arguments.hook,
+            "include_ready_for_manual_hook": (
+                parsed_arguments.format_one and parsed_arguments.hook is not None
             ),
-        )
+            "process_all": parsed_arguments.all,
+        }
+        if progress_callback is not None:
+            formatter_kwargs["progress_callback"] = progress_callback
+        exit_code = max(exit_code, run_pending_clip_formatter(config, **formatter_kwargs))
     return exit_code
 
 

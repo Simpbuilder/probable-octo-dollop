@@ -23,6 +23,12 @@ from hook_generator import (
     select_hook_candidate,
 )
 from hook_generator.generator import validate_custom_hook
+from pipeline_runtime import (
+    BackgroundJobManager,
+    QueueProgress,
+    RuntimeStatus,
+    RuntimeStatusStore,
+)
 from publisher import UploadProgressCallback, estimate_batch_duration
 from publisher.history import load_post_history
 
@@ -134,19 +140,105 @@ class UiConfigurationValues:
     instagram_maximum_delay_seconds: int = 300
 
 
-def run_pipeline_action(arguments: Sequence[str]) -> PipelineActionResult:
+def run_pipeline_action(
+    arguments: Sequence[str],
+    *,
+    progress_callback=None,
+) -> PipelineActionResult:
     """Run the existing CLI entry point and capture its terminal output for the UI log panel."""
     import run_pipeline
 
     output = StringIO()
     normalized_arguments = tuple(str(argument) for argument in arguments)
     with redirect_stdout(output), redirect_stderr(output):
-        exit_code = run_pipeline.main(normalized_arguments)
+        if progress_callback is None:
+            exit_code = run_pipeline.main(normalized_arguments)
+        else:
+            exit_code = run_pipeline.main(
+                normalized_arguments, progress_callback=progress_callback
+            )
     return PipelineActionResult(
         arguments=normalized_arguments,
         exit_code=exit_code,
         output=output.getvalue().strip(),
     )
+
+
+_BACKGROUND_JOB_MANAGERS: dict[Path, BackgroundJobManager] = {}
+AUTO_REFRESH_INTERVALS: dict[str, int | None] = {
+    "1 second": 1,
+    "2 seconds": 2,
+    "5 seconds": 5,
+    "Off": None,
+}
+
+
+def runtime_status_file(project_root: Path) -> Path:
+    """Return the ignored, local-only runtime status path for one project workspace."""
+    return Path(project_root).resolve() / "metadata" / "runtime_status.json"
+
+
+def load_runtime_status(project_root: Path) -> RuntimeStatus:
+    """Load safe idle status when the local runtime file has not been created yet."""
+    return RuntimeStatusStore(runtime_status_file(project_root)).load()
+
+
+def resolve_auto_refresh_interval(selection: str, status: RuntimeStatus) -> int | None:
+    """Return a validated polling interval only while a local background job is active."""
+    if selection not in AUTO_REFRESH_INTERVALS:
+        raise ValueError("Unknown live refresh interval.")
+    return AUTO_REFRESH_INTERVALS[selection] if status.is_active else None
+
+
+def start_background_pipeline_job(project_root: Path, job: str) -> RuntimeStatus:
+    """Start a single full-queue UI action without duplicating CLI stage orchestration."""
+    actions = {
+        "download": ("Download", ("--download", "--all")),
+        "generate_hooks": ("Generate hooks", ("--generate-hooks", "--all")),
+        "format": ("Format", ("--format", "--all")),
+        "upload_drafts": ("Upload Instagram drafts", ("--upload-instagram", "--all")),
+        "publish_now": (
+            "Publish Instagram",
+            ("--upload-instagram", "--publish-now", "--all"),
+        ),
+    }
+    if job not in actions:
+        raise ValueError(f"Unknown background pipeline job: {job}")
+    project_root = Path(project_root).resolve()
+    stage, arguments = actions[job]
+    manager = _background_job_manager(project_root)
+
+    def runner(context) -> int:
+        result = run_pipeline_action(arguments, progress_callback=context.report)
+        context.report(
+            QueueProgress(
+                stage=stage,
+                current_item=None,
+                completed_count=load_runtime_status(project_root).completed_count,
+                total_count=load_runtime_status(project_root).total_count,
+                failed_count=load_runtime_status(project_root).failed_count,
+                remaining_count=0,
+                message=result.output.splitlines()[-1] if result.output else "Pipeline action finished.",
+            )
+        )
+        return result.exit_code
+
+    return manager.start(stage, runner)
+
+
+def request_background_job_stop(project_root: Path) -> RuntimeStatus:
+    """Request a graceful stop for the active local batch without touching completed work."""
+    return _background_job_manager(Path(project_root).resolve()).request_cancel()
+
+
+def _background_job_manager(project_root: Path) -> BackgroundJobManager:
+    """Reuse one in-process worker manager through Streamlit reruns for this workspace."""
+    resolved_root = Path(project_root).resolve()
+    manager = _BACKGROUND_JOB_MANAGERS.get(resolved_root)
+    if manager is None:
+        manager = BackgroundJobManager(RuntimeStatusStore(runtime_status_file(resolved_root)))
+        _BACKGROUND_JOB_MANAGERS[resolved_root] = manager
+    return manager
 
 
 def run_manual_import(project_root: Path) -> PipelineActionResult:

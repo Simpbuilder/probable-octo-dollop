@@ -13,6 +13,7 @@ from pathlib import Path
 from collector.file_utils import concise_error_message
 from collector.models import DEFAULT_BLOCKED_HOOK_PHRASES, ClipMetadata, HookGenerationConfig
 from collector.storage import load_all_clip_metadata, update_clip_metadata
+from pipeline_runtime import QueueProgress, QueueProgressCallback
 
 from .client import HookGenerationClientProtocol
 
@@ -54,7 +55,13 @@ class PendingHookGenerator:
         self._client = client
         self._logger = logger or logging.getLogger(__name__)
 
-    def run(self, *, force: bool = False, process_all: bool = False) -> HookGenerationSummary:
+    def run(
+        self,
+        *,
+        force: bool = False,
+        process_all: bool = False,
+        progress_callback: QueueProgressCallback | None = None,
+    ) -> HookGenerationSummary:
         """Generate candidates while keeping each failure retryable and isolated."""
         summary = HookGenerationSummary()
         try:
@@ -79,9 +86,47 @@ class PendingHookGenerator:
             len(eligible_clips), self._config.maximum_clips_per_run
         )
         summary.remaining = summary.eligible - summary.processing
-        for clip in eligible_clips[: summary.processing]:
+        processing_clips = eligible_clips[: summary.processing]
+        for index, clip in enumerate(processing_clips):
+            if not self._emit_progress(
+                progress_callback, clip, summary, total=len(processing_clips),
+                remaining=len(processing_clips) - index, message="Generating hooks."
+            ):
+                summary.remaining += len(processing_clips) - index
+                break
             self._generate_for_clip(clip, summary)
+            if not self._emit_progress(
+                progress_callback, clip, summary, total=len(processing_clips),
+                remaining=len(processing_clips) - index - 1, message="Hook generation item completed."
+            ):
+                summary.remaining += len(processing_clips) - index - 1
+                break
         return summary
+
+    @staticmethod
+    def _emit_progress(
+        callback: QueueProgressCallback | None,
+        clip: ClipMetadata,
+        summary: HookGenerationSummary,
+        *,
+        total: int,
+        remaining: int,
+        message: str,
+    ) -> bool:
+        """Report each complete clip and let an optional local caller stop later work."""
+        if callback is None:
+            return True
+        return callback(
+            QueueProgress(
+                stage="Generate hooks",
+                current_item=clip.unique_id,
+                completed_count=summary.generated + summary.skipped,
+                total_count=total,
+                failed_count=summary.failed,
+                remaining_count=remaining,
+                message=message,
+            )
+        ) is not False
 
     def _generate_for_clip(self, clip: ClipMetadata, summary: HookGenerationSummary) -> None:
         """Generate and persist one set of candidates without stopping later queue entries."""
