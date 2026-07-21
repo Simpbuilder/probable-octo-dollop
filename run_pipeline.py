@@ -34,12 +34,14 @@ from publisher import (
     InstagramUploader,
     UploadProgressCallback,
     UploadSummary,
+    YoutubeClientError,
     YoutubeUploadSummary,
     YoutubeUploader,
     ZernioClientError,
     create_zernio_client,
     create_youtube_client,
     count_pending_youtube_uploads,
+    login_to_youtube,
     load_zernio_api_key,
 )
 from pipeline_runtime import QueueProgress, QueueProgressCallback
@@ -149,6 +151,11 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
         "--youtube-status",
         action="store_true",
         help="Show reusable YouTube credential, channel, source, and pending-upload status.",
+    )
+    parser.add_argument(
+        "--youtube-login",
+        action="store_true",
+        help="Open Google OAuth in a browser and save a root-level reusable YouTube token.",
     )
     parser.add_argument(
         "--cleanup",
@@ -590,6 +597,25 @@ def run_youtube_status(config: CollectorConfig) -> int:
     return 0
 
 
+def run_youtube_login(config: CollectorConfig, project_root: Path) -> int:
+    """Run explicit browser OAuth without inspecting or uploading any media."""
+    if config.youtube_config is None:
+        print("YouTube login unavailable: config/youtube.json is missing.")
+        return 2
+    client_secret_file = Path(project_root).resolve() / "client_secret.json"
+    token_file = Path(project_root).resolve() / "token.json"
+    print("Opening Google login in your browser...")
+    try:
+        channel = login_to_youtube(client_secret_file, token_file)
+    except YoutubeClientError as error:
+        print(f"YouTube login failed: {error}")
+        return 2
+    print("YouTube login complete")
+    print(f"Channel name: {channel.channel_name}")
+    print(f"Channel ID: {channel.channel_id}")
+    return 0
+
+
 def run_youtube_uploader(
     config: CollectorConfig,
     *,
@@ -654,6 +680,7 @@ def _has_pipeline_stage_arguments(arguments: argparse.Namespace) -> bool:
             arguments.upload_youtube,
             arguments.upload_youtube_one,
             arguments.youtube_status,
+            arguments.youtube_login,
         )
     )
 
@@ -713,7 +740,17 @@ def main(
     if parsed_arguments.youtube_status and youtube_upload_requested:
         print("Pipeline not started: --youtube-status cannot be combined with a YouTube upload command.")
         return 2
-    if (youtube_upload_requested or parsed_arguments.youtube_status) and (
+    if parsed_arguments.youtube_login and (
+        parsed_arguments.youtube_status or youtube_upload_requested
+    ):
+        print("Pipeline not started: --youtube-login must run as a separate YouTube command.")
+        return 2
+    youtube_command_requested = (
+        youtube_upload_requested
+        or parsed_arguments.youtube_status
+        or parsed_arguments.youtube_login
+    )
+    if youtube_command_requested and (
         upload_requested or parsed_arguments.list_zernio_accounts
     ):
         print("Pipeline not started: YouTube and Zernio publishing commands must run separately.")
@@ -730,7 +767,7 @@ def main(
     if parsed_arguments.list_zernio_accounts and upload_requested:
         print("Pipeline not started: --list-zernio-accounts cannot be combined with an upload command.")
         return 2
-    if (parsed_arguments.list_zernio_accounts or upload_requested or youtube_upload_requested or parsed_arguments.youtube_status) and any(
+    if (parsed_arguments.list_zernio_accounts or upload_requested or youtube_command_requested) and any(
         (
             parsed_arguments.download,
             parsed_arguments.format,
@@ -758,6 +795,8 @@ def main(
 
     if parsed_arguments.list_zernio_accounts:
         return run_zernio_account_listing(project_root)
+    if parsed_arguments.youtube_login:
+        return run_youtube_login(config, project_root)
     if parsed_arguments.youtube_status:
         return run_youtube_status(config)
     if upload_requested:

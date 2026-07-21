@@ -62,6 +62,11 @@ class CollectorConfigTests(unittest.TestCase):
         self.assertEqual(config.youtube_config.privacy_status, "public")
         self.assertFalse(config.youtube_config.made_for_kids)
         self.assertEqual(config.youtube_config.maximum_uploads_per_run, 50)
+        self.assertEqual(
+            config.youtube_config.oauth_client_credentials_file,
+            PROJECT_ROOT / "client_secret.json",
+        )
+        self.assertEqual(config.youtube_config.token_file, PROJECT_ROOT / "token.json")
 
     def test_rejects_enabled_reddit_without_subreddits(self) -> None:
         """Validation catches a missing Reddit target list before a run starts."""

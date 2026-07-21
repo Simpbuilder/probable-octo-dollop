@@ -449,6 +449,14 @@ def _validate_collector_config(config: CollectorConfig) -> None:
             raise ConfigurationError(
                 "youtube.posted_directory must match the posted output folder."
             )
+        project_root = config.output_path("metadata").parent
+        expected_client_secret_file = project_root / "client_secret.json"
+        if config.youtube_config.oauth_client_credentials_file != expected_client_secret_file:
+            raise ConfigurationError(
+                "youtube.oauth_client_credentials_file must be the root-level client_secret.json."
+            )
+        if config.youtube_config.token_file != project_root / "token.json":
+            raise ConfigurationError("youtube.token_file must be the root-level token.json.")
 
 
 def _resolve_path(raw_path: str, project_root: Path) -> Path:

@@ -354,12 +354,24 @@ uploads, and `move_after_upload: false`. The title uses `selected_hook`, then
 YouTube's 100-character title limit. The configured description and tags are used
 as written. No AI description or automatic hashtags are added.
 
-The checked-in configuration references the exact OAuth client, reusable token,
-and upload history paths discovered in the sibling `ai-video-poster` project.
-Those files are read in place, never copied, printed, or rewritten. A missing or
-invalid token produces a clean message and never opens a browser automatically.
+For first-time setup, download a desktop OAuth client from Google Cloud and save
+it as `client_secret.json` in this project's root. Then run:
 
-Inspect safe authentication and queue status without uploading:
+```bash
+py run_pipeline.py --youtube-login
+```
+
+The command opens Google's consent screen in the default browser. After approval,
+it saves `token.json` in the project root and prints the authenticated YouTube
+channel name and ID. It does not inspect or upload a video. Both OAuth files are
+ignored by Git and protected from cleanup.
+
+The uploader and status command use those root-level OAuth files. The sibling
+`ai-video-poster` upload history remains read-only and is used only as an additional
+duplicate signal. A missing or invalid token produces a clean message; only the
+explicit `--youtube-login` command opens a browser or writes a token.
+
+Inspect authentication and queue status without uploading or changing the token:
 
 ```bash
 py run_pipeline.py --youtube-status

@@ -12,6 +12,8 @@ from .models import YoutubeAuthenticationStatus, YoutubeChannel, YoutubeUploadRe
 
 
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+YOUTUBE_READONLY_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
+YOUTUBE_OAUTH_SCOPES = (YOUTUBE_UPLOAD_SCOPE, YOUTUBE_READONLY_SCOPE)
 
 
 class YoutubeClientError(RuntimeError):
@@ -165,24 +167,7 @@ class YoutubeClient:
 
     def _authenticated_channel(self) -> YoutubeChannel | None:
         """Read the channel's public name and ID without returning credential values."""
-        try:
-            response = self._youtube_service().channels().list(
-                part="snippet", mine=True, maxResults=1
-            ).execute()
-        except Exception as error:
-            raise YoutubeClientError(f"Could not read the authenticated YouTube channel: {error}") from error
-        items = response.get("items", []) if isinstance(response, dict) else []
-        if not items or not isinstance(items[0], dict):
-            return None
-        channel_id = items[0].get("id")
-        snippet = items[0].get("snippet")
-        channel_name = snippet.get("title") if isinstance(snippet, dict) else None
-        if not isinstance(channel_id, str) or not channel_id:
-            return None
-        return YoutubeChannel(
-            channel_id=channel_id,
-            channel_name=channel_name if isinstance(channel_name, str) and channel_name else channel_id,
-        )
+        return load_authenticated_youtube_channel(self._youtube_service())
 
     def _youtube_service(self) -> object:
         """Build the Google API service lazily so plain project commands require no OAuth package import."""
@@ -198,7 +183,7 @@ class YoutubeClient:
         return self._service
 
     def _credentials(self) -> object:
-        """Load and refresh the external token in memory only, never rewriting another repository's token."""
+        """Load and refresh the configured token in memory without writing during status or upload."""
         if not self._config.oauth_client_credentials_file.is_file():
             raise YoutubeAuthenticationError(
                 f"OAuth client credentials are unavailable: {self._config.oauth_client_credentials_file}"
@@ -210,7 +195,7 @@ class YoutubeClient:
         Credentials, Request = _google_auth_dependencies()
         try:
             credentials = Credentials.from_authorized_user_file(
-                str(self._config.token_file), [YOUTUBE_UPLOAD_SCOPE]
+                str(self._config.token_file), list(YOUTUBE_OAUTH_SCOPES)
             )
             if credentials.expired and credentials.refresh_token:
                 credentials.refresh(Request())
@@ -229,6 +214,26 @@ class YoutubeClient:
 def create_youtube_client(config: YoutubeConfig) -> YoutubeClient:
     """Create the non-interactive reusable-token client for the configured YouTube channel."""
     return YoutubeClient(config)
+
+
+def load_authenticated_youtube_channel(service: object) -> YoutubeChannel | None:
+    """Read the authenticated channel from a built service for status and first-time login."""
+    try:
+        response = service.channels().list(part="snippet", mine=True, maxResults=1).execute()
+    except Exception as error:
+        raise YoutubeClientError(f"Could not read the authenticated YouTube channel: {error}") from error
+    items = response.get("items", []) if isinstance(response, dict) else []
+    if not items or not isinstance(items[0], dict):
+        return None
+    channel_id = items[0].get("id")
+    snippet = items[0].get("snippet")
+    channel_name = snippet.get("title") if isinstance(snippet, dict) else None
+    if not isinstance(channel_id, str) or not channel_id:
+        return None
+    return YoutubeChannel(
+        channel_id=channel_id,
+        channel_name=channel_name if isinstance(channel_name, str) and channel_name else channel_id,
+    )
 
 
 def _google_dependencies() -> tuple[object, object]:

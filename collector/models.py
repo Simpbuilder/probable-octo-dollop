@@ -472,8 +472,8 @@ class YoutubeConfig:
     posted_directory: Path = Path("clips/posted")
     duplicate_check_enabled: bool = True
     made_for_kids: bool = False
-    oauth_client_credentials_file: Path = Path("../ai-video-poster/client_secret.json")
-    token_file: Path = Path("../ai-video-poster/token.json")
+    oauth_client_credentials_file: Path = Path("client_secret.json")
+    token_file: Path = Path("token.json")
     external_history_file: Path = Path("../ai-video-poster/youtube_upload_history.json")
 
     def __post_init__(self) -> None:

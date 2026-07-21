@@ -12,7 +12,7 @@
   "posted_directory": "clips/posted",
   "duplicate_check_enabled": true,
   "made_for_kids": false,
-  "oauth_client_credentials_file": "../ai-video-poster/client_secret.json",
-  "token_file": "../ai-video-poster/token.json",
+  "oauth_client_credentials_file": "client_secret.json",
+  "token_file": "token.json",
   "external_history_file": "../ai-video-poster/youtube_upload_history.json"
 }

@@ -18,7 +18,8 @@ from publisher.youtube.models import (
     YoutubeUploadResult,
 )
 from publisher.youtube.uploader import YoutubeUploader
-from run_pipeline import main as run_pipeline_main
+from publisher.youtube.oauth import login_to_youtube
+from run_pipeline import main as run_pipeline_main, run_youtube_login
 from ui_helpers import load_youtube_overview
 
 
@@ -128,7 +129,13 @@ class YoutubeClientTests(unittest.TestCase):
                 @classmethod
                 def from_authorized_user_file(cls, path: str, scopes: list[str]):
                     self.assertEqual(Path(path), config.token_file)
-                    self.assertEqual(scopes, ["https://www.googleapis.com/auth/youtube.upload"])
+                    self.assertEqual(
+                        scopes,
+                        [
+                            "https://www.googleapis.com/auth/youtube.upload",
+                            "https://www.googleapis.com/auth/youtube.readonly",
+                        ],
+                    )
                     return cls()
 
             with patch(
@@ -183,6 +190,108 @@ class YoutubeClientTests(unittest.TestCase):
         body = captured["body"]
         self.assertEqual(body["status"]["privacyStatus"], "public")  # type: ignore[index]
         self.assertFalse(body["status"]["selfDeclaredMadeForKids"])  # type: ignore[index]
+
+
+class YoutubeOAuthLoginTests(unittest.TestCase):
+    """Verify browser login and token persistence without opening a browser or using the network."""
+
+    def test_browser_login_saves_root_token_and_returns_channel(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            client_secret_file = root / "client_secret.json"
+            token_file = root / "token.json"
+            client_secret_file.write_text("{}", encoding="utf-8")
+            captured: dict[str, object] = {}
+
+            class FakeCredentials:
+                def to_json(self) -> str:
+                    return '{"token": "test-token"}'
+
+            class FakeFlow:
+                @classmethod
+                def from_client_secrets_file(cls, path: str, scopes: list[str]):
+                    captured["client_secret_file"] = Path(path)
+                    captured["scopes"] = scopes
+                    return cls()
+
+                def run_local_server(self, **kwargs: object) -> FakeCredentials:
+                    captured["login_options"] = kwargs
+                    return FakeCredentials()
+
+            class FakeChannelRequest:
+                def execute(self) -> dict[str, object]:
+                    return {
+                        "items": [
+                            {"id": "channel-123", "snippet": {"title": "Creator channel"}}
+                        ]
+                    }
+
+            class FakeChannels:
+                def list(self, **kwargs: object) -> FakeChannelRequest:
+                    captured["channel_request"] = kwargs
+                    return FakeChannelRequest()
+
+            class FakeService:
+                def channels(self) -> FakeChannels:
+                    return FakeChannels()
+
+            def fake_build(api_name: str, version: str, **kwargs: object) -> FakeService:
+                captured["service"] = (api_name, version, kwargs)
+                return FakeService()
+
+            with patch(
+                "publisher.youtube.oauth._oauth_dependencies",
+                return_value=(FakeFlow, fake_build),
+            ):
+                channel = login_to_youtube(client_secret_file, token_file)
+
+            self.assertEqual(channel, YoutubeChannel("channel-123", "Creator channel"))
+            self.assertEqual(captured["client_secret_file"], client_secret_file)
+            self.assertEqual(
+                captured["scopes"],
+                [
+                    "https://www.googleapis.com/auth/youtube.upload",
+                    "https://www.googleapis.com/auth/youtube.readonly",
+                ],
+            )
+            self.assertEqual(
+                captured["login_options"],
+                {
+                    "port": 0,
+                    "open_browser": True,
+                    "access_type": "offline",
+                    "prompt": "consent",
+                },
+            )
+            self.assertEqual(token_file.read_text(encoding="utf-8"), '{"token": "test-token"}')
+            self.assertFalse((root / "token.json.tmp").exists())
+
+    def test_missing_client_secret_fails_before_oauth_or_token_creation(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            with patch("publisher.youtube.oauth._oauth_dependencies") as dependencies:
+                with self.assertRaisesRegex(YoutubeClientError, "client file not found"):
+                    login_to_youtube(root / "client_secret.json", root / "token.json")
+
+            dependencies.assert_not_called()
+            self.assertFalse((root / "token.json").exists())
+
+    def test_login_runner_prints_channel_and_uses_only_root_oauth_files(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config = type("Config", (), {"youtube_config": make_config(root)})()
+            output: list[str] = []
+            with patch(
+                "run_pipeline.login_to_youtube",
+                return_value=YoutubeChannel("channel-1", "Test channel"),
+            ) as login:
+                with patch("builtins.print", side_effect=output.append):
+                    exit_code = run_youtube_login(config, root)
+
+        self.assertEqual(exit_code, 0)
+        login.assert_called_once_with(root / "client_secret.json", root / "token.json")
+        self.assertIn("Channel name: Test channel", output)
+        self.assertIn("Channel ID: channel-1", output)
 
 
 class YoutubeUploaderTests(unittest.TestCase):
@@ -370,3 +479,29 @@ class YoutubeRunnerTests(unittest.TestCase):
 
         self.assertFalse(uploader.call_args.kwargs["process_all"])
         self.assertTrue(uploader.call_args.kwargs["upload_one"])
+
+    def test_login_and_status_are_separate_non_upload_commands(self) -> None:
+        with (
+            patch("run_pipeline.run_youtube_login", return_value=0) as login,
+            patch("run_pipeline.run_youtube_status", return_value=0) as status,
+            patch("run_pipeline.run_youtube_uploader") as uploader,
+        ):
+            self.assertEqual(run_pipeline_main(["--youtube-login"]), 0)
+            login.assert_called_once()
+            status.assert_not_called()
+            uploader.assert_not_called()
+
+        with (
+            patch("run_pipeline.run_youtube_login") as login,
+            patch("run_pipeline.run_youtube_status", return_value=0) as status,
+            patch("run_pipeline.run_youtube_uploader") as uploader,
+        ):
+            self.assertEqual(run_pipeline_main(["--youtube-status"]), 0)
+            status.assert_called_once()
+            login.assert_not_called()
+            uploader.assert_not_called()
+
+        self.assertEqual(
+            run_pipeline_main(["--youtube-login", "--upload-youtube-one"]),
+            2,
+        )

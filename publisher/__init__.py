@@ -29,6 +29,7 @@ from .youtube import (
     YoutubeUploader,
     count_pending_youtube_uploads,
     create_youtube_client,
+    login_to_youtube,
 )
 
 __all__ = [
@@ -49,6 +50,7 @@ __all__ = [
     "YoutubeUploader",
     "create_youtube_client",
     "count_pending_youtube_uploads",
+    "login_to_youtube",
     "resolve_instagram_account",
     "resolve_post_delay",
     "UploadSummary",

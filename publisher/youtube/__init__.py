@@ -15,6 +15,7 @@ from .models import (
     YoutubeUploadSummary,
 )
 from .uploader import YoutubeUploader, YoutubeUploadProgressCallback, count_pending_youtube_uploads
+from .oauth import login_to_youtube
 
 __all__ = [
     "YoutubeAuthenticationError",
@@ -30,4 +31,5 @@ __all__ = [
     "YoutubeUploader",
     "create_youtube_client",
     "count_pending_youtube_uploads",
+    "login_to_youtube",
 ]
