@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from dataclasses import is_dataclass
 import ast
 import importlib
 import inspect
@@ -119,6 +120,23 @@ class UiHelperTests(unittest.TestCase):
             parameters = tuple(inspect.signature(getattr(ui_helpers, name)).parameters)
             self.assertEqual(parameters, EXPECTED_APP_UI_IMPORT_PARAMETERS[name], name)
         self.assertNotIn("runtime_status_file", imported_names)
+
+    def test_all_ui_models_imported_by_app_exist(self) -> None:
+        """Keep app's model import contract synchronized with the public UI model module."""
+        ui_models = importlib.import_module("ui_models")
+        app = importlib.import_module("app")
+        app_tree = ast.parse((PROJECT_ROOT / "app.py").read_text(encoding="utf-8"))
+        imported_names = {
+            alias.name
+            for node in ast.walk(app_tree)
+            if isinstance(node, ast.ImportFrom) and node.module == "ui_models"
+            for alias in node.names
+        }
+
+        self.assertTrue(imported_names)
+        self.assertTrue(all(hasattr(ui_models, name) for name in imported_names))
+        self.assertTrue(all(is_dataclass(getattr(ui_models, name)) for name in imported_names))
+        self.assertIs(app.YoutubeOverview, ui_models.YoutubeOverview)
 
     def test_background_stop_uses_the_canonical_cancellation_request(self) -> None:
         """The UI compatibility export delegates to the one durable background-job mechanism."""
