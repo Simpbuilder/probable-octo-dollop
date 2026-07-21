@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
 from collections import Counter
-from dataclasses import dataclass
 from io import StringIO
 import json
 import os
@@ -23,124 +22,19 @@ from hook_generator import (
     select_hook_candidate,
 )
 from hook_generator.generator import validate_custom_hook
-from background_jobs import (
-    request_background_job_stop,
-    runtime_status_file,
-    start_background_pipeline_job,
-)
-from pipeline_runtime import (
-    RuntimeStatus,
-    load_runtime_status as load_runtime_status_file,
-)
 from publisher import UploadProgressCallback, estimate_batch_duration
 from publisher.history import load_post_history
-
-
-@dataclass(frozen=True, slots=True)
-class PipelineActionResult:
-    """Captured output and exit status from one existing pipeline action."""
-
-    arguments: tuple[str, ...]
-    exit_code: int
-    output: str
-
-
-@dataclass(frozen=True, slots=True)
-class UrlAppendResult:
-    """The outcome of adding de-duplicated valid URL lines to the local intake queue."""
-
-    added: int
-    duplicates: int
-    invalid_lines: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class DashboardCounts:
-    """Small status counters rendered by the local Streamlit dashboard."""
-
-    urls_waiting: int
-    pending_metadata: int
-    downloaded_clips: int
-    awaiting_hook_generation: int
-    awaiting_hook_review: int
-    ready_hooked_videos: int
-    uploaded_or_posted: int
-    failed_items: int
-
-
-@dataclass(frozen=True, slots=True)
-class SystemAvailability:
-    """Availability booleans that deliberately reveal no credential values."""
-
-    ffmpeg: bool
-    ffprobe: bool
-    openai_api_key: bool
-    zernio_api_key: bool
-
-
-@dataclass(frozen=True, slots=True)
-class PipelineProgress:
-    """Read-only queue sizes for the pipeline stages shown in the local UI."""
-
-    urls_to_import: int
-    downloads_to_run: int
-    hooks_to_generate: int
-    hooks_to_review: int
-    formats_to_run: int
-    uploads_to_run: int
-
-
-@dataclass(frozen=True, slots=True)
-class InstagramOverview:
-    """Safe local Instagram account and history summary for the UI."""
-
-    account_username: str | None
-    publish_mode: str
-    fixed_caption: str
-    pending_uploads: int
-    history_total: int
-    drafts: int
-    published: int
-    delay_enabled: bool = True
-    delay_seconds: int = 30
-    maximum_delay_seconds: int = 300
-    estimated_batch_seconds: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class FailedItem:
-    """One stored clip error suitable for a concise UI table."""
-
-    clip_id: str
-    title: str
-    error: str
-
-
-@dataclass(frozen=True, slots=True)
-class ReadyVideo:
-    """A hooked-ready local video together with metadata and upload-state details."""
-
-    path: Path
-    selected_hook: str | None
-    processing_status: str
-    upload_status: str
-
-
-@dataclass(frozen=True, slots=True)
-class UiConfigurationValues:
-    """Editable settings intentionally limited to common queue and publishing controls."""
-
-    downloads_per_run: int
-    hook_generations_per_run: int
-    formats_per_run: int
-    uploads_per_run: int
-    instagram_publish_mode: str
-    instagram_caption: str
-    instagram_account_id: str | None
-    automatic_hook_selection: bool
-    instagram_delay_enabled: bool = True
-    instagram_delay_seconds: int = 30
-    instagram_maximum_delay_seconds: int = 300
+from ui_models import (
+    DashboardCounts,
+    FailedItem,
+    InstagramOverview,
+    PipelineActionResult,
+    PipelineProgress,
+    ReadyVideo,
+    SystemAvailability,
+    UiConfigurationValues,
+    UrlAppendResult,
+)
 
 
 def run_pipeline_action(
@@ -165,26 +59,6 @@ def run_pipeline_action(
         exit_code=exit_code,
         output=output.getvalue().strip(),
     )
-
-
-AUTO_REFRESH_INTERVALS: dict[str, int | None] = {
-    "1 second": 1,
-    "2 seconds": 2,
-    "5 seconds": 5,
-    "Off": None,
-}
-
-
-def load_runtime_status(project_root: Path) -> RuntimeStatus:
-    """Load safe idle status when the local runtime file has not been created yet."""
-    return load_runtime_status_file(runtime_status_file(project_root))
-
-
-def resolve_auto_refresh_interval(selection: str, status: RuntimeStatus) -> int | None:
-    """Return a validated polling interval only while a local background job is active."""
-    if selection not in AUTO_REFRESH_INTERVALS:
-        raise ValueError("Unknown live refresh interval.")
-    return AUTO_REFRESH_INTERVALS[selection] if status.is_active else None
 
 
 def run_manual_import(project_root: Path) -> PipelineActionResult:

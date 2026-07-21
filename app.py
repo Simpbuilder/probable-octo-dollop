@@ -14,8 +14,9 @@ from collector import ConfigurationError, load_collector_config
 from collector.models import CollectorConfig
 from background_jobs import request_background_job_stop, start_background_pipeline_job
 from pipeline_runtime import load_runtime_status as load_runtime_status_file
+from ui_models import DashboardCounts, InstagramOverview, PipelineProgress, UiConfigurationValues
+from ui_runtime import resolve_auto_refresh_interval
 from ui_helpers import (
-    UiConfigurationValues,
     append_unique_urls,
     load_dashboard_counts,
     load_failed_items,
@@ -31,14 +32,10 @@ from ui_helpers import (
     run_manual_import,
     run_instagram_upload_action,
     run_pipeline_action,
-    resolve_auto_refresh_interval,
     save_review_custom_hook,
     save_ui_configuration,
     select_review_candidate,
 )
-
-if TYPE_CHECKING:
-    from ui_helpers import DashboardCounts, InstagramOverview, PipelineProgress
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
