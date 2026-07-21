@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import ast
 import importlib
+import inspect
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import shutil
@@ -12,7 +13,8 @@ import unittest
 from unittest.mock import patch
 
 from collector import load_collector_config
-from pipeline_runtime import RuntimeStatus
+from background_jobs import request_background_job_stop as canonical_request_background_job_stop
+from pipeline_runtime import RuntimeStatus, RuntimeStatusStore
 from publisher.history import append_post_history, build_post_history_record
 from ui_helpers import (
     InstagramOverview,
@@ -21,6 +23,7 @@ from ui_helpers import (
     load_instagram_overview,
     load_pipeline_progress,
     load_runtime_status,
+    request_background_job_stop,
     run_manual_import,
     run_pipeline_action,
     save_ui_configuration,
@@ -28,6 +31,79 @@ from ui_helpers import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+EXPECTED_APP_UI_IMPORT_PARAMETERS = {
+    "UiConfigurationValues": (
+        "downloads_per_run",
+        "hook_generations_per_run",
+        "formats_per_run",
+        "uploads_per_run",
+        "instagram_publish_mode",
+        "instagram_caption",
+        "instagram_account_id",
+        "automatic_hook_selection",
+        "instagram_delay_enabled",
+        "instagram_delay_seconds",
+        "instagram_maximum_delay_seconds",
+    ),
+    "append_unique_urls": ("input_file", "raw_text"),
+    "load_dashboard_counts": ("project_root",),
+    "load_failed_items": ("config",),
+    "load_instagram_overview": ("config",),
+    "load_pipeline_progress": ("config", "counts"),
+    "load_ready_videos": ("config",),
+    "load_reviewable_clips": ("config",),
+    "load_system_availability": ("project_root",),
+    "load_ui_configuration": ("config",),
+    "preview_cleanup": ("project_root", "all_temporary", "reset_project"),
+    "reject_review_candidates": ("config", "clip_id"),
+    "run_confirmed_cleanup": ("plan",),
+    "run_manual_import": ("project_root",),
+    "run_instagram_upload_action": (
+        "project_root",
+        "upload_one",
+        "process_all",
+        "publish_now",
+        "post_delay",
+        "progress_callback",
+    ),
+    "run_pipeline_action": ("arguments", "progress_callback"),
+    "resolve_auto_refresh_interval": ("selection", "status"),
+    "save_review_custom_hook": ("config", "clip_id", "custom_text"),
+    "save_ui_configuration": ("project_root", "values"),
+    "select_review_candidate": ("config", "clip_id", "candidate_index"),
+    "DashboardCounts": (
+        "urls_waiting",
+        "pending_metadata",
+        "downloaded_clips",
+        "awaiting_hook_generation",
+        "awaiting_hook_review",
+        "ready_hooked_videos",
+        "uploaded_or_posted",
+        "failed_items",
+    ),
+    "InstagramOverview": (
+        "account_username",
+        "publish_mode",
+        "fixed_caption",
+        "pending_uploads",
+        "history_total",
+        "drafts",
+        "published",
+        "delay_enabled",
+        "delay_seconds",
+        "maximum_delay_seconds",
+        "estimated_batch_seconds",
+    ),
+    "PipelineProgress": (
+        "urls_to_import",
+        "downloads_to_run",
+        "hooks_to_generate",
+        "hooks_to_review",
+        "formats_to_run",
+        "uploads_to_run",
+    ),
+}
 
 
 class UiHelperTests(unittest.TestCase):
@@ -76,8 +152,9 @@ class UiHelperTests(unittest.TestCase):
         loader.assert_called_once_with(PROJECT_ROOT / "metadata" / "runtime_status.json")
 
     def test_all_runtime_ui_helper_imports_in_app_exist(self) -> None:
-        """App startup cannot reference a stale public helper name after future UI refactors."""
+        """App startup imports the complete supported UI helper contract with expected signatures."""
         ui_helpers = importlib.import_module("ui_helpers")
+        app = importlib.import_module("app")
         app_tree = ast.parse((PROJECT_ROOT / "app.py").read_text(encoding="utf-8"))
         imported_names = {
             alias.name
@@ -86,8 +163,48 @@ class UiHelperTests(unittest.TestCase):
             for alias in node.names
         }
 
-        self.assertTrue(imported_names)
+        self.assertTrue(callable(app.main))
+        self.assertSetEqual(imported_names, set(EXPECTED_APP_UI_IMPORT_PARAMETERS))
         self.assertTrue(all(hasattr(ui_helpers, name) for name in imported_names))
+        for name in imported_names:
+            parameters = tuple(inspect.signature(getattr(ui_helpers, name)).parameters)
+            self.assertEqual(parameters, EXPECTED_APP_UI_IMPORT_PARAMETERS[name], name)
+        self.assertNotIn("runtime_status_file", imported_names)
+
+    def test_background_stop_uses_the_canonical_cancellation_request(self) -> None:
+        """The UI compatibility export delegates to the one durable background-job mechanism."""
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            store = RuntimeStatusStore(root / "metadata" / "runtime_status.json")
+            original = store.write(
+                RuntimeStatus(
+                    job_id="job-1",
+                    stage="Download",
+                    status="running",
+                    completed_count=2,
+                    total_count=5,
+                    failed_count=1,
+                    current_item="clip-4",
+                )
+            )
+
+            stopped = canonical_request_background_job_stop(root)
+
+            self.assertIs(request_background_job_stop, canonical_request_background_job_stop)
+            self.assertTrue(stopped.cancel_requested)
+            self.assertEqual(stopped.completed_count, original.completed_count)
+            self.assertEqual(stopped.failed_count, original.failed_count)
+            self.assertEqual(stopped.current_item, original.current_item)
+
+    def test_app_uses_the_canonical_runtime_status_loader(self) -> None:
+        """App runtime reads bypass the UI helper module's public import surface."""
+        app = importlib.import_module("app")
+        expected = RuntimeStatus(status="running", job_id="job-1", stage="Download")
+
+        with patch("app.load_runtime_status_file", return_value=expected) as loader:
+            self.assertEqual(app._load_runtime_status(), expected)
+
+        loader.assert_called_once_with(PROJECT_ROOT / "metadata" / "runtime_status.json")
 
     def test_manual_import_delegates_to_existing_runner_function(self) -> None:
         """The URL import UI helper calls the runner's manual collector rather than parsing metadata itself."""

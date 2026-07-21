@@ -12,6 +12,7 @@ import streamlit as st
 from cleanup import print_cleanup_plan
 from collector import ConfigurationError, load_collector_config
 from collector.models import CollectorConfig
+from background_jobs import request_background_job_stop, start_background_pipeline_job
 from pipeline_runtime import load_runtime_status as load_runtime_status_file
 from ui_helpers import (
     UiConfigurationValues,
@@ -30,13 +31,10 @@ from ui_helpers import (
     run_manual_import,
     run_instagram_upload_action,
     run_pipeline_action,
-    runtime_status_file,
-    request_background_job_stop,
     resolve_auto_refresh_interval,
     save_review_custom_hook,
     save_ui_configuration,
     select_review_candidate,
-    start_background_pipeline_job,
 )
 
 if TYPE_CHECKING:
@@ -239,7 +237,7 @@ def _estimated_remaining(status: object) -> str:
 
 def _load_runtime_status():
     """Read canonical runtime state without depending on a UI helper import at startup."""
-    return load_runtime_status_file(runtime_status_file(PROJECT_ROOT))
+    return load_runtime_status_file(PROJECT_ROOT / "metadata" / "runtime_status.json")
 
 
 def _render_dashboard(
