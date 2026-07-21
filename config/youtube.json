@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "source_directory": "clips/ready/hooked",
+  "privacy_status": "public",
+  "category_id": "24",
+  "default_title_template": "{title}",
+  "default_description": "",
+  "tags": [],
+  "maximum_uploads_per_run": 50,
+  "delay_between_uploads_seconds": 30,
+  "move_after_upload": false,
+  "posted_directory": "clips/posted",
+  "duplicate_check_enabled": true,
+  "made_for_kids": false,
+  "oauth_client_credentials_file": "../ai-video-poster/client_secret.json",
+  "token_file": "../ai-video-poster/token.json",
+  "external_history_file": "../ai-video-poster/youtube_upload_history.json"
+}

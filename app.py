@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import Callable
 
 import streamlit as st
 
@@ -14,7 +14,13 @@ from collector import ConfigurationError, load_collector_config
 from collector.models import CollectorConfig
 from background_jobs import request_background_job_stop, start_background_pipeline_job
 from pipeline_runtime import load_runtime_status as load_runtime_status_file
-from ui_models import DashboardCounts, InstagramOverview, PipelineProgress, UiConfigurationValues
+from ui_models import (
+    DashboardCounts,
+    InstagramOverview,
+    PipelineProgress,
+    UiConfigurationValues,
+    YoutubeOverview,
+)
 from ui_runtime import resolve_auto_refresh_interval
 from ui_helpers import (
     append_unique_urls,
@@ -26,6 +32,7 @@ from ui_helpers import (
     load_reviewable_clips,
     load_system_availability,
     load_ui_configuration,
+    load_youtube_overview,
     preview_cleanup,
     reject_review_candidates,
     run_confirmed_cleanup,
@@ -45,6 +52,7 @@ PAGES = (
     "Hooks",
     "Ready Videos",
     "Instagram",
+    "YouTube",
     "Cleanup",
     "Settings",
     "Logs",
@@ -64,11 +72,12 @@ def main() -> None:
         counts = load_dashboard_counts(PROJECT_ROOT)
         progress = load_pipeline_progress(config, counts)
         instagram = load_instagram_overview(config)
+        youtube = load_youtube_overview(config)
     except (ConfigurationError, OSError, ValueError) as error:
         st.error(f"Local pipeline status is unavailable: {error}", icon=":material/error:")
         return
 
-    page, refresh_interval = _render_sidebar(config, counts, instagram)
+    page, refresh_interval = _render_sidebar(config, counts, instagram, youtube)
     _render_header(counts)
     _render_live_job_banner(refresh_interval)
     if page == "Dashboard":
@@ -81,6 +90,8 @@ def main() -> None:
         _render_ready_videos(config)
     elif page == "Instagram":
         _render_instagram(config, instagram)
+    elif page == "YouTube":
+        _render_youtube(config, youtube)
     elif page == "Cleanup":
         _render_cleanup_controls()
     elif page == "Settings":
@@ -102,6 +113,7 @@ def _render_sidebar(
     config: CollectorConfig,
     counts: DashboardCounts,
     instagram: InstagramOverview,
+    youtube: YoutubeOverview,
 ) -> tuple[str, int | None]:
     """Keep global navigation and compact configuration context out of the main workspace."""
     with st.sidebar:
@@ -122,6 +134,7 @@ def _render_sidebar(
         with st.expander("Active configuration"):
             st.caption(f"Instagram: @{instagram.account_username or 'not configured'}")
             st.caption(f"Default upload mode: {instagram.publish_mode}")
+            st.caption(f"YouTube: {youtube.privacy_status} ({youtube.pending_uploads} pending)")
             st.caption(f"Download limit: {config.downloader_config.downloads_per_run if config.downloader_config else 'n/a'}")
             st.caption(f"Format limit: {config.formatter_config.maximum_clips_per_run if config.formatter_config else 'n/a'}")
         refresh_options = ("1 second", "2 seconds", "5 seconds", "Off")
@@ -194,10 +207,11 @@ def _render_live_dashboard(refresh_interval: int | None) -> None:
             counts = load_dashboard_counts(PROJECT_ROOT)
             progress = load_pipeline_progress(config, counts)
             instagram = load_instagram_overview(config)
+            youtube = load_youtube_overview(config)
         except (ConfigurationError, OSError, ValueError) as error:
             st.error(f"Dashboard status could not be refreshed: {error}", icon=":material/error:")
             return
-        _render_dashboard(counts, progress, instagram)
+        _render_dashboard(counts, progress, instagram, youtube)
 
     live_dashboard()
 
@@ -241,6 +255,7 @@ def _render_dashboard(
     counts: DashboardCounts,
     progress: PipelineProgress,
     instagram: InstagramOverview,
+    youtube: YoutubeOverview,
 ) -> None:
     """Show concise counts, availability, progress, and the next safe pipeline actions."""
     st.subheader("Pipeline overview", anchor=False)
@@ -252,10 +267,11 @@ def _render_dashboard(
         ("Awaiting hook selection", counts.awaiting_hook_review),
         ("Ready hooked videos", counts.ready_hooked_videos),
         ("Uploaded videos", counts.uploaded_or_posted),
+        ("Pending YouTube uploads", counts.pending_youtube_uploads),
         ("Failures", counts.failed_items),
     )
-    for row in (metrics[:4], metrics[4:]):
-        for column, (label, value) in zip(st.columns(4), row):
+    for row in (metrics[:3], metrics[3:6], metrics[6:]):
+        for column, (label, value) in zip(st.columns(len(row)), row):
             column.metric(label, value, border=True)
 
     left, right = st.columns((3, 2), gap="medium")
@@ -264,7 +280,7 @@ def _render_dashboard(
     with right:
         _render_dependency_status()
 
-    _render_pipeline_actions(progress, instagram)
+    _render_pipeline_actions(progress, instagram, youtube)
 
 
 def _render_pipeline_progress(progress: PipelineProgress) -> None:
@@ -276,6 +292,7 @@ def _render_pipeline_progress(progress: PipelineProgress) -> None:
         ("Hook review", progress.hooks_to_review),
         ("Formatting", progress.formats_to_run),
         ("Upload", progress.uploads_to_run),
+        ("YouTube upload", progress.youtube_uploads_to_run),
     )
     with st.container(border=True):
         st.subheader("Pipeline progress", anchor=False)
@@ -307,7 +324,11 @@ def _render_dependency_status() -> None:
                 st.warning(f"{name} unavailable", icon=":material/warning:")
 
 
-def _render_pipeline_actions(progress: PipelineProgress, instagram: InstagramOverview) -> None:
+def _render_pipeline_actions(
+    progress: PipelineProgress,
+    instagram: InstagramOverview,
+    youtube: YoutubeOverview,
+) -> None:
     """Group existing CLI actions by workflow stage and disable empty queues."""
     job_is_active = _load_runtime_status().is_active
     with st.container(border=True):
@@ -362,6 +383,14 @@ def _render_pipeline_actions(progress: PipelineProgress, instagram: InstagramOve
             width="stretch",
         ):
             _start_background_job("upload_drafts")
+
+        if st.button(
+            "Upload YouTube Shorts",
+            icon=":material/smart_display:",
+            disabled=not youtube.pending_uploads or job_is_active,
+            width="stretch",
+        ):
+            _start_background_job("upload_youtube")
 
 
 def _render_add_clips(progress: PipelineProgress) -> None:
@@ -637,6 +666,97 @@ def _render_instagram(config: CollectorConfig, instagram: InstagramOverview) -> 
             _start_background_job("publish_now")
 
 
+def _render_youtube(config: CollectorConfig, youtube: YoutubeOverview) -> None:
+    """Show safe reusable-token state and dispatch only the established background upload actions."""
+    try:
+        youtube = load_youtube_overview(config, include_channel=True)
+        values = load_ui_configuration(config)
+    except ValueError as error:
+        st.error(f"YouTube status is unavailable: {error}", icon=":material/error:")
+        return
+    job_is_active = _load_runtime_status().is_active
+    st.subheader("YouTube Shorts", anchor=False)
+    channel, visibility, pending, history = st.columns(4)
+    channel.metric("Channel", youtube.channel_name or "not available", border=True)
+    visibility.metric("Visibility", youtube.privacy_status, border=True)
+    pending.metric("Pending Shorts", youtube.pending_uploads, border=True)
+    history.metric("Upload history", youtube.history_total, border=True)
+    if youtube.token_reusable:
+        st.success("Reusable YouTube token is ready.", icon=":material/check_circle:")
+    else:
+        st.warning(
+            youtube.status_detail or "Reusable YouTube credentials are not ready.",
+            icon=":material/warning:",
+        )
+    if youtube.channel_id:
+        st.caption(f"Channel ID: `{youtube.channel_id}`")
+
+    actions, settings = st.columns((2, 3), gap="medium")
+    with actions:
+        with st.container(border=True):
+            st.subheader("Upload", anchor=False)
+            if st.button(
+                "Upload one Short",
+                icon=":material/upload:",
+                type="primary",
+                disabled=not youtube.pending_uploads or job_is_active or not youtube.token_reusable,
+                width="stretch",
+            ):
+                _start_background_job("upload_youtube_one")
+            if st.button(
+                "Upload all Shorts",
+                icon=":material/playlist_add:",
+                disabled=not youtube.pending_uploads or job_is_active or not youtube.token_reusable,
+                width="stretch",
+            ):
+                _start_background_job("upload_youtube")
+            st.caption(f"Configured delay: {_format_duration(youtube.delay_seconds)}")
+    with settings:
+        with st.container(border=True):
+            st.subheader("YouTube settings", anchor=False)
+            with st.form("youtube-settings-form"):
+                enabled = st.checkbox("Enable YouTube uploads", value=values.youtube_enabled)
+                privacy = st.selectbox(
+                    "Visibility",
+                    ("public", "private", "unlisted"),
+                    index=("public", "private", "unlisted").index(values.youtube_privacy_status),
+                )
+                maximum = int(st.number_input(
+                    "Maximum uploads per run",
+                    min_value=1,
+                    value=values.youtube_maximum_uploads_per_run,
+                ))
+                delay = int(st.number_input(
+                    "Delay between successful uploads (seconds)",
+                    min_value=0,
+                    value=values.youtube_delay_seconds,
+                ))
+                description = st.text_area(
+                    "Default description",
+                    value=values.youtube_default_description,
+                    height=100,
+                )
+                tags = st.text_input("Tags (comma-separated)", value=values.youtube_tags)
+                move_after_upload = st.checkbox(
+                    "Move uploaded Shorts to clips/posted",
+                    value=values.youtube_move_after_upload,
+                )
+                saved = st.form_submit_button("Save YouTube settings", type="primary", width="stretch")
+            if saved:
+                _save_configuration(
+                    replace(
+                        values,
+                        youtube_enabled=enabled,
+                        youtube_privacy_status=privacy,
+                        youtube_maximum_uploads_per_run=maximum,
+                        youtube_delay_seconds=delay,
+                        youtube_default_description=description,
+                        youtube_tags=tags,
+                        youtube_move_after_upload=move_after_upload,
+                    )
+                )
+
+
 def _render_cleanup_controls() -> None:
     """Make cleanup scopes legible while delegating preview and confirmation rules to shared code."""
     st.subheader("Cleanup", anchor=False)
@@ -749,6 +869,13 @@ def _render_settings(config: CollectorConfig) -> None:
                 instagram_delay_enabled=values.instagram_delay_enabled,
                 instagram_delay_seconds=values.instagram_delay_seconds,
                 instagram_maximum_delay_seconds=values.instagram_maximum_delay_seconds,
+                youtube_enabled=values.youtube_enabled,
+                youtube_privacy_status=values.youtube_privacy_status,
+                youtube_delay_seconds=values.youtube_delay_seconds,
+                youtube_maximum_uploads_per_run=values.youtube_maximum_uploads_per_run,
+                youtube_default_description=values.youtube_default_description,
+                youtube_tags=values.youtube_tags,
+                youtube_move_after_upload=values.youtube_move_after_upload,
             )
         )
 

@@ -53,6 +53,15 @@ class CollectorConfigTests(unittest.TestCase):
         self.assertTrue(config.instagram_config.delay_between_posts_enabled)
         self.assertEqual(config.instagram_config.delay_between_posts_seconds, 30)
         self.assertEqual(config.instagram_config.maximum_delay_seconds, 300)
+        self.assertIsNotNone(config.youtube_config)
+        self.assertTrue(config.youtube_config.enabled)
+        self.assertEqual(
+            config.youtube_config.source_directory,
+            PROJECT_ROOT / "clips" / "ready" / "hooked",
+        )
+        self.assertEqual(config.youtube_config.privacy_status, "public")
+        self.assertFalse(config.youtube_config.made_for_kids)
+        self.assertEqual(config.youtube_config.maximum_uploads_per_run, 50)
 
     def test_rejects_enabled_reddit_without_subreddits(self) -> None:
         """Validation catches a missing Reddit target list before a run starts."""

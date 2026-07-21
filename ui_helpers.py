@@ -24,6 +24,8 @@ from hook_generator import (
 from hook_generator.generator import validate_custom_hook
 from publisher import UploadProgressCallback, estimate_batch_duration
 from publisher.history import load_post_history
+from publisher.youtube import count_pending_youtube_uploads, create_youtube_client
+from publisher.youtube.history import load_youtube_history
 from ui_models import (
     DashboardCounts,
     FailedItem,
@@ -34,6 +36,7 @@ from ui_models import (
     SystemAvailability,
     UiConfigurationValues,
     UrlAppendResult,
+    YoutubeOverview,
 )
 
 
@@ -188,6 +191,7 @@ def load_dashboard_counts(project_root: Path) -> DashboardCounts:
         ),
         ready_hooked_videos=ready_hooked_videos,
         uploaded_or_posted=len(history),
+        pending_youtube_uploads=_youtube_pending_upload_count(config),
         failed_items=len(load_failed_items(config)),
     )
 
@@ -222,6 +226,7 @@ def load_pipeline_progress(
         hooks_to_review=counts.awaiting_hook_review,
         formats_to_run=formats_to_run,
         uploads_to_run=overview.pending_uploads,
+        youtube_uploads_to_run=counts.pending_youtube_uploads,
     )
 
 
@@ -255,6 +260,33 @@ def load_instagram_overview(config: CollectorConfig) -> InstagramOverview:
             if instagram.delay_between_posts_enabled
             else 0,
         ),
+    )
+
+
+def load_youtube_overview(
+    config: CollectorConfig,
+    *,
+    include_channel: bool = False,
+) -> YoutubeOverview:
+    """Return safe YouTube readiness and local queue history without duplicating uploader logic."""
+    youtube = config.youtube_config
+    if youtube is None:
+        raise ValueError("YouTube configuration is missing.")
+    authentication = create_youtube_client(youtube).authentication_status(
+        include_channel=include_channel
+    )
+    history = _load_youtube_history_safely(config.output_path("metadata") / "youtube_upload_history.json")
+    return YoutubeOverview(
+        credentials_available=authentication.credentials_available,
+        token_available=authentication.token_available,
+        token_reusable=authentication.token_reusable,
+        channel_name=authentication.channel.channel_name if authentication.channel else None,
+        channel_id=authentication.channel.channel_id if authentication.channel else None,
+        pending_uploads=_youtube_pending_upload_count(config),
+        history_total=len(history),
+        privacy_status=youtube.privacy_status,
+        delay_seconds=youtube.delay_between_uploads_seconds,
+        status_detail=authentication.error,
     )
 
 
@@ -329,6 +361,7 @@ def load_ui_configuration(config: CollectorConfig) -> UiConfigurationValues:
         or config.hook_generation_config is None
         or config.formatter_config is None
         or config.instagram_config is None
+        or config.youtube_config is None
     ):
         raise ValueError("One or more UI-editable configuration sections are missing.")
     return UiConfigurationValues(
@@ -343,6 +376,13 @@ def load_ui_configuration(config: CollectorConfig) -> UiConfigurationValues:
         instagram_delay_enabled=config.instagram_config.delay_between_posts_enabled,
         instagram_delay_seconds=config.instagram_config.delay_between_posts_seconds,
         instagram_maximum_delay_seconds=config.instagram_config.maximum_delay_seconds,
+        youtube_enabled=config.youtube_config.enabled,
+        youtube_privacy_status=config.youtube_config.privacy_status,
+        youtube_delay_seconds=config.youtube_config.delay_between_uploads_seconds,
+        youtube_maximum_uploads_per_run=config.youtube_config.maximum_uploads_per_run,
+        youtube_default_description=config.youtube_config.default_description,
+        youtube_tags=", ".join(config.youtube_config.tags),
+        youtube_move_after_upload=config.youtube_config.move_after_upload,
     )
 
 
@@ -355,6 +395,7 @@ def save_ui_configuration(project_root: Path, values: UiConfigurationValues) -> 
     formatter_data = _load_json_object(config_directory / "formatter.json")
     hooks_data = _load_json_object(config_directory / "hooks.json")
     instagram_data = _load_json_object(config_directory / "instagram.json")
+    youtube_data = _load_json_object(config_directory / "youtube.json")
 
     downloader_data = collector_data.get("downloader")
     if not isinstance(downloader_data, dict):
@@ -370,12 +411,20 @@ def save_ui_configuration(project_root: Path, values: UiConfigurationValues) -> 
     instagram_data["delay_between_posts_enabled"] = values.instagram_delay_enabled
     instagram_data["delay_between_posts_seconds"] = values.instagram_delay_seconds
     instagram_data["maximum_delay_seconds"] = values.instagram_maximum_delay_seconds
+    youtube_data["enabled"] = values.youtube_enabled
+    youtube_data["privacy_status"] = values.youtube_privacy_status
+    youtube_data["delay_between_uploads_seconds"] = values.youtube_delay_seconds
+    youtube_data["maximum_uploads_per_run"] = values.youtube_maximum_uploads_per_run
+    youtube_data["default_description"] = values.youtube_default_description
+    youtube_data["tags"] = [tag.strip() for tag in values.youtube_tags.split(",") if tag.strip()]
+    youtube_data["move_after_upload"] = values.youtube_move_after_upload
 
     changed_data = {
         "collector.json": collector_data,
         "formatter.json": formatter_data,
         "hooks.json": hooks_data,
         "instagram.json": instagram_data,
+        "youtube.json": youtube_data,
     }
     _validate_config_changes(config_directory, changed_data)
     for filename, data in changed_data.items():
@@ -416,6 +465,25 @@ def _load_history_safely(history_file: Path) -> list[dict[str, object]]:
         return []
 
 
+def _load_youtube_history_safely(history_file: Path) -> list[dict[str, object]]:
+    """Keep local dashboard status usable when optional YouTube history is unreadable."""
+    try:
+        return load_youtube_history(history_file)
+    except ValueError:
+        return []
+
+
+def _youtube_pending_upload_count(config: CollectorConfig) -> int:
+    """Count locally eligible hooked MP4s without requesting YouTube or touching OAuth state."""
+    youtube = config.youtube_config
+    if youtube is None:
+        return 0
+    return count_pending_youtube_uploads(
+        history_file=config.output_path("metadata") / "youtube_upload_history.json",
+        config=youtube,
+    )
+
+
 def _history_by_filename(records: Sequence[Mapping[str, object]]) -> dict[str, str]:
     """Index durable local history records by filename for UI-only status presentation."""
     return {
@@ -444,6 +512,7 @@ def _clip_error(clip: ClipMetadata) -> str | None:
         clip.format_error,
         clip.hook_generation_error,
         clip.hook_error,
+        clip.youtube_upload_error,
     ):
         if error:
             return error
@@ -498,6 +567,20 @@ def _validate_ui_configuration_values(values: UiConfigurationValues) -> None:
         raise ValueError("Instagram post spacing values must be zero or greater.")
     if values.instagram_delay_seconds > values.instagram_maximum_delay_seconds:
         raise ValueError("Instagram post spacing cannot exceed its configured maximum.")
+    if values.youtube_privacy_status not in {"public", "private", "unlisted"}:
+        raise ValueError("YouTube privacy status must be public, private, or unlisted.")
+    if (
+        isinstance(values.youtube_delay_seconds, bool)
+        or not isinstance(values.youtube_delay_seconds, int)
+        or values.youtube_delay_seconds < 0
+    ):
+        raise ValueError("YouTube upload delay must be a non-negative integer.")
+    if (
+        isinstance(values.youtube_maximum_uploads_per_run, bool)
+        or not isinstance(values.youtube_maximum_uploads_per_run, int)
+        or values.youtube_maximum_uploads_per_run <= 0
+    ):
+        raise ValueError("YouTube maximum uploads per run must be a positive integer.")
 
 
 def _validate_config_changes(

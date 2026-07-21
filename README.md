@@ -14,9 +14,9 @@ pip install -r requirements.txt
 ```
 
 This installs PRAW, `python-dotenv`, `yt-dlp`, Pillow for local hook-text overlays,
-the OpenAI SDK for optional hook-candidate generation, and `requests` for the
-explicit Zernio upload client. It also installs Streamlit for the optional local
-control UI.
+the OpenAI SDK for optional hook-candidate generation, `requests` for the
+explicit Zernio upload client, and Google's API/OAuth libraries for explicit
+YouTube Shorts uploads. It also installs Streamlit for the optional local control UI.
 
 ### FFmpeg
 
@@ -339,6 +339,51 @@ The two settings cannot be enabled together. Upload failures leave the local
 video and do not stop later eligible files; retry the same explicit command
 after correcting the reported issue.
 
+## YouTube Shorts Uploads
+
+The optional YouTube uploader reads only direct `.mp4` files from
+`clips/ready/hooked/`. It preserves originals by default, records YouTube video
+ID, URL, title, privacy status, timestamp, and retryable failures in matching
+clip metadata, and saves local success history in
+`metadata/youtube_upload_history.json`.
+
+`config/youtube.json` defaults to public uploads, `selfDeclaredMadeForKids: false`,
+duplicate protection, a 50-item safety limit, a 30-second delay between successful
+uploads, and `move_after_upload: false`. The title uses `selected_hook`, then
+`hook_text`, then the source title, then the filename stem; it is capped at
+YouTube's 100-character title limit. The configured description and tags are used
+as written. No AI description or automatic hashtags are added.
+
+The checked-in configuration references the exact OAuth client, reusable token,
+and upload history paths discovered in the sibling `ai-video-poster` project.
+Those files are read in place, never copied, printed, or rewritten. A missing or
+invalid token produces a clean message and never opens a browser automatically.
+
+Inspect safe authentication and queue status without uploading:
+
+```bash
+py run_pipeline.py --youtube-status
+```
+
+Run one deliberate live test only after reviewing that status:
+
+```bash
+py run_pipeline.py --upload-youtube-one
+```
+
+Run the configured batch limit, or every eligible Short deliberately:
+
+```bash
+py run_pipeline.py --upload-youtube
+py run_pipeline.py --upload-youtube --all
+```
+
+The uploader waits only between successful eligible uploads. It does not wait
+before the first or after the final upload, and duplicates, skips, and failures
+do not add a delay. A failed upload remains retryable and does not stop later
+eligible files. Set `move_after_upload` only to move successful files to
+`clips/posted/`; it never deletes a source video.
+
 ## Local UI
 
 Start the local Streamlit UI with:
@@ -352,8 +397,9 @@ directory. The UI is local only and reuses the existing collectors, downloader,
 hook generator, formatter, uploader, storage, and cleanup modules.
 
 Its Dashboard shows queue counts, stored failures, ready hooked videos, upload
-history counts, and whether FFmpeg, ffprobe, and the two API keys are available;
-key values are never displayed. Add URLs accepts one URL per line and preserves
+history counts, and pending YouTube Shorts; key values are never displayed. The
+YouTube page shows reusable-token/channel status, configured visibility, local
+history, delay, upload actions, and validated settings. Add URLs accepts one URL per line and preserves
 the current queue's comments and valid existing entries. Pipeline controls run
 the established stages, while publish-now controls remain disabled until their
 explicit confirmation checkbox is selected.
@@ -361,9 +407,9 @@ explicit confirmation checkbox is selected.
 Hook Review shows only saved candidates and writes selections through the same
 metadata actions as `review_hooks.py`; it never generates or renders a hook.
 The Videos tab plays local `clips/ready/hooked/` files and displays each saved
-hook, processing status, and upload status. Configuration exposes only common
-queue limits, hook auto-selection, and Instagram posting settings, and validates
-the complete configuration before saving.
+hook, processing status, and upload status. Configuration exposes common queue
+limits, hook auto-selection, Instagram posting settings, and YouTube settings,
+then validates the complete configuration before saving.
 
 ## Cleanup And Reset
 
@@ -401,7 +447,8 @@ typing `RESET` exactly; `--yes` can never bypass this. The UI requires the same
 exact text before reset execution.
 
 All cleanup levels preserve `.env`, every `config/` file, source code, Git data,
-`metadata/processed_urls.txt`, `metadata/zernio_post_history.json`, and
+OAuth credential/token files, `metadata/processed_urls.txt`,
+`metadata/zernio_post_history.json`, `metadata/youtube_upload_history.json`, and
 `clips/posted/`. Default cleanup also preserves downloaded clips and formatted
 ready videos. No cleanup action creates uploads or publishes to Instagram.
 

@@ -9,7 +9,7 @@ import time
 import unittest
 
 from pipeline_runtime import BackgroundJobManager, QueueProgress, RuntimeStatus, RuntimeStatusStore
-from ui_helpers import resolve_auto_refresh_interval
+from ui_runtime import resolve_auto_refresh_interval
 
 
 class PipelineRuntimeTests(unittest.TestCase):

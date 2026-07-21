@@ -35,6 +35,7 @@ class DashboardCounts:
     awaiting_hook_review: int
     ready_hooked_videos: int
     uploaded_or_posted: int
+    pending_youtube_uploads: int
     failed_items: int
 
 
@@ -58,6 +59,7 @@ class PipelineProgress:
     hooks_to_review: int
     formats_to_run: int
     uploads_to_run: int
+    youtube_uploads_to_run: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +77,22 @@ class InstagramOverview:
     delay_seconds: int = 30
     maximum_delay_seconds: int = 300
     estimated_batch_seconds: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class YoutubeOverview:
+    """Safe local YouTube authentication, queue, and configuration summary for the UI."""
+
+    credentials_available: bool
+    token_available: bool
+    token_reusable: bool
+    channel_name: str | None
+    channel_id: str | None
+    pending_uploads: int
+    history_total: int
+    privacy_status: str
+    delay_seconds: int
+    status_detail: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,3 +129,10 @@ class UiConfigurationValues:
     instagram_delay_enabled: bool = True
     instagram_delay_seconds: int = 30
     instagram_maximum_delay_seconds: int = 300
+    youtube_enabled: bool = True
+    youtube_privacy_status: str = "public"
+    youtube_delay_seconds: int = 30
+    youtube_maximum_uploads_per_run: int = 50
+    youtube_default_description: str = ""
+    youtube_tags: str = ""
+    youtube_move_after_upload: bool = False

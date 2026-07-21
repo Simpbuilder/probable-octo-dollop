@@ -72,6 +72,8 @@ class CleanupTests(unittest.TestCase):
         ):
             (root / relative).mkdir(parents=True, exist_ok=True)
         (root / ".env").write_text("ZERNIO_API_KEY=private\n", encoding="utf-8")
+        (root / "client_secret.json").write_text("{\"client_id\": \"private\"}\n", encoding="utf-8")
+        (root / "token.json").write_text("{\"refresh_token\": \"private\"}\n", encoding="utf-8")
         (root / "config" / "collector.json").write_text("{}\n", encoding="utf-8")
         (root / "input_urls.txt").write_text("https://example.invalid/queued\n", encoding="utf-8")
         (root / "metadata" / "processed_urls.txt").write_text("https://example.invalid/done\n", encoding="utf-8")
@@ -85,6 +87,10 @@ class CleanupTests(unittest.TestCase):
                 public_media_url="https://media.example/posted.mp4",
                 publish_mode="publish_now",
             ),
+        )
+        (root / "metadata" / "youtube_upload_history.json").write_text(
+            '{"uploads": [{"youtube_video_id": "video-1", "status": "uploaded"}]}',
+            encoding="utf-8",
         )
         (root / "clips" / "posted" / "posted.mp4").write_bytes(b"posted")
         return root
@@ -116,9 +122,12 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue(pending_file.is_file())
         self.assertFalse(empty_file.exists())
         self.assertTrue((root / ".env").is_file())
+        self.assertTrue((root / "client_secret.json").is_file())
+        self.assertTrue((root / "token.json").is_file())
         self.assertTrue((root / "config" / "collector.json").is_file())
         self.assertTrue((root / "metadata" / "processed_urls.txt").is_file())
         self.assertTrue((root / "metadata" / "zernio_post_history.json").is_file())
+        self.assertTrue((root / "metadata" / "youtube_upload_history.json").is_file())
         self.assertTrue((root / "clips" / "posted" / "posted.mp4").is_file())
         clips = {clip.unique_id: clip for clip in load_all_clip_metadata(metadata_file)}
         self.assertEqual(clips["source"].download_status, "downloaded")
@@ -169,7 +178,10 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(plain_file.exists())
         self.assertTrue(source_file.is_file())
         self.assertTrue(metadata_file.is_file())
+        self.assertTrue((root / "client_secret.json").is_file())
+        self.assertTrue((root / "token.json").is_file())
         self.assertTrue((root / "metadata" / "zernio_post_history.json").is_file())
+        self.assertTrue((root / "metadata" / "youtube_upload_history.json").is_file())
         self.assertTrue((root / "clips" / "posted" / "posted.mp4").is_file())
         clips = {clip.unique_id: clip for clip in load_all_clip_metadata(metadata_file)}
         self.assertEqual(clips["pending"].download_status, "pending")
@@ -208,8 +220,11 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(metadata_file.exists())
         self.assertEqual((root / "input_urls.txt").read_text(encoding="utf-8"), "")
         self.assertTrue((root / ".env").is_file())
+        self.assertTrue((root / "client_secret.json").is_file())
+        self.assertTrue((root / "token.json").is_file())
         self.assertTrue((root / "config" / "collector.json").is_file())
         self.assertTrue((root / "metadata" / "zernio_post_history.json").is_file())
+        self.assertTrue((root / "metadata" / "youtube_upload_history.json").is_file())
         self.assertTrue((root / "clips" / "posted" / "posted.mp4").is_file())
 
     def test_cleanup_cli_routes_to_the_shared_cleanup_command(self) -> None:

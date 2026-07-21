@@ -19,6 +19,8 @@ _JOB_ACTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     "generate_hooks": ("Generate hooks", ("--generate-hooks", "--all")),
     "format": ("Format", ("--format", "--all")),
     "upload_drafts": ("Upload Instagram drafts", ("--upload-instagram", "--all")),
+    "upload_youtube": ("Upload YouTube Shorts", ("--upload-youtube",)),
+    "upload_youtube_one": ("Upload one YouTube Short", ("--upload-youtube-one",)),
     "publish_now": (
         "Publish Instagram",
         ("--upload-instagram", "--publish-now", "--all"),

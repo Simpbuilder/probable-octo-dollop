@@ -12,6 +12,8 @@ DownloadStatus = Literal["pending", "downloaded", "failed"]
 ProcessingStatus = Literal["pending", "approved", "rejected", "ready", "posted"]
 PipelineMode = Literal["reddit_api", "manual_urls", "both"]
 InstagramPublishMode = Literal["draft", "publish_now"]
+YoutubePrivacyStatus = Literal["public", "private", "unlisted"]
+YoutubeUploadStatus = Literal["uploaded", "failed"]
 CropMode = Literal["fit"]
 HookStatus = Literal["rendered", "skipped", "failed"]
 HookSource = Literal["manual", "source_title", "generated"]
@@ -81,6 +83,7 @@ class CollectorConfig:
     formatter_config: "FormatterConfig | None" = None
     hook_generation_config: "HookGenerationConfig | None" = None
     instagram_config: "InstagramConfig | None" = None
+    youtube_config: "YoutubeConfig | None" = None
     manual_urls_per_run: int = 50
 
     def __post_init__(self) -> None:
@@ -140,6 +143,13 @@ class ClipMetadata:
     hook_generation_error: str | None = None
     hook_generated_at: datetime | None = None
     hook_model: str | None = None
+    youtube_video_id: str | None = None
+    youtube_video_url: str | None = None
+    youtube_upload_status: YoutubeUploadStatus | None = None
+    youtube_upload_error: str | None = None
+    youtube_uploaded_at: datetime | None = None
+    youtube_title: str | None = None
+    youtube_privacy_status: YoutubePrivacyStatus | None = None
 
     def __post_init__(self) -> None:
         """Validate stable metadata before it is written to storage."""
@@ -211,6 +221,27 @@ class ClipMetadata:
             raise ValueError("hook_generated_at must include timezone information when provided.")
         if self.hook_model is not None and not self.hook_model.strip():
             raise ValueError("hook_model must be a non-empty string or null.")
+        if self.youtube_video_id is not None and not self.youtube_video_id.strip():
+            raise ValueError("youtube_video_id must be a non-empty string or null.")
+        if self.youtube_video_url is not None and not self.youtube_video_url.strip():
+            raise ValueError("youtube_video_url must be a non-empty string or null.")
+        if self.youtube_upload_status is not None and self.youtube_upload_status not in {
+            "uploaded",
+            "failed",
+        }:
+            raise ValueError("youtube_upload_status is not supported.")
+        if self.youtube_upload_error is not None and not self.youtube_upload_error.strip():
+            raise ValueError("youtube_upload_error must be a non-empty string or null.")
+        if self.youtube_uploaded_at is not None and self.youtube_uploaded_at.tzinfo is None:
+            raise ValueError("youtube_uploaded_at must include timezone information when provided.")
+        if self.youtube_title is not None and not self.youtube_title.strip():
+            raise ValueError("youtube_title must be a non-empty string or null.")
+        if self.youtube_privacy_status is not None and self.youtube_privacy_status not in {
+            "public",
+            "private",
+            "unlisted",
+        }:
+            raise ValueError("youtube_privacy_status is not supported.")
 
     def to_dict(self) -> dict[str, object]:
         """Serialize the record to JSON-compatible primitives."""
@@ -252,6 +283,15 @@ class ClipMetadata:
                 self.hook_generated_at.isoformat() if self.hook_generated_at else None
             ),
             "hook_model": self.hook_model,
+            "youtube_video_id": self.youtube_video_id,
+            "youtube_video_url": self.youtube_video_url,
+            "youtube_upload_status": self.youtube_upload_status,
+            "youtube_upload_error": self.youtube_upload_error,
+            "youtube_uploaded_at": (
+                self.youtube_uploaded_at.isoformat() if self.youtube_uploaded_at else None
+            ),
+            "youtube_title": self.youtube_title,
+            "youtube_privacy_status": self.youtube_privacy_status,
         }
 
     @classmethod
@@ -293,6 +333,17 @@ class ClipMetadata:
             hook_generation_error=_optional_string(data, "hook_generation_error"),
             hook_generated_at=_optional_datetime(data, "hook_generated_at"),
             hook_model=_optional_string(data, "hook_model"),
+            youtube_video_id=_optional_string(data, "youtube_video_id"),
+            youtube_video_url=_optional_string(data, "youtube_video_url"),
+            youtube_upload_status=_optional_string(
+                data, "youtube_upload_status"
+            ),  # type: ignore[arg-type]
+            youtube_upload_error=_optional_string(data, "youtube_upload_error"),
+            youtube_uploaded_at=_optional_datetime(data, "youtube_uploaded_at"),
+            youtube_title=_optional_string(data, "youtube_title"),
+            youtube_privacy_status=_optional_string(
+                data, "youtube_privacy_status"
+            ),  # type: ignore[arg-type]
         )
 
 
@@ -402,6 +453,53 @@ class InstagramConfig:
             raise ValueError(
                 "instagram delay_between_posts_seconds cannot exceed maximum_delay_seconds."
             )
+
+
+@dataclass(frozen=True, slots=True)
+class YoutubeConfig:
+    """Validated settings for explicit hooked YouTube Shorts uploads."""
+
+    enabled: bool = False
+    source_directory: Path = Path("clips/ready/hooked")
+    privacy_status: YoutubePrivacyStatus = "public"
+    category_id: str = "24"
+    default_title_template: str = "{title}"
+    default_description: str = ""
+    tags: tuple[str, ...] = ()
+    maximum_uploads_per_run: int = 50
+    delay_between_uploads_seconds: int = 30
+    move_after_upload: bool = False
+    posted_directory: Path = Path("clips/posted")
+    duplicate_check_enabled: bool = True
+    made_for_kids: bool = False
+    oauth_client_credentials_file: Path = Path("../ai-video-poster/client_secret.json")
+    token_file: Path = Path("../ai-video-poster/token.json")
+    external_history_file: Path = Path("../ai-video-poster/youtube_upload_history.json")
+
+    def __post_init__(self) -> None:
+        """Validate local queue safety and the non-interactive reusable OAuth arrangement."""
+        if self.privacy_status not in {"public", "private", "unlisted"}:
+            raise ValueError("youtube privacy_status must be public, private, or unlisted.")
+        if not self.category_id.strip():
+            raise ValueError("youtube category_id must not be empty.")
+        if not self.default_title_template.strip():
+            raise ValueError("youtube default_title_template must not be empty.")
+        if "{title}" not in self.default_title_template:
+            raise ValueError("youtube default_title_template must contain '{title}'.")
+        if self.maximum_uploads_per_run <= 0:
+            raise ValueError("youtube maximum_uploads_per_run must be greater than zero.")
+        if self.delay_between_uploads_seconds < 0:
+            raise ValueError("youtube delay_between_uploads_seconds must be zero or greater.")
+        if self.made_for_kids:
+            raise ValueError("youtube made_for_kids must remain false for this uploader.")
+        if any(not tag.strip() for tag in self.tags):
+            raise ValueError("youtube tags must not contain empty values.")
+        if any(not path.name for path in (
+            self.oauth_client_credentials_file,
+            self.token_file,
+            self.external_history_file,
+        )):
+            raise ValueError("youtube OAuth and history paths must name files.")
 
 
 @dataclass(frozen=True, slots=True)

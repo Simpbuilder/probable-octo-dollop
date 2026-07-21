@@ -13,6 +13,7 @@ from .models import (
     InstagramConfig,
     PipelineMode,
     SourceConfig,
+    YoutubeConfig,
 )
 from .reddit_client import (
     RedditCredentials,
@@ -55,4 +56,5 @@ __all__ = [
     "RedditMetadataCollector",
     "save_clip_metadata",
     "update_clip_metadata",
+    "YoutubeConfig",
 ]

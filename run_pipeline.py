@@ -34,8 +34,12 @@ from publisher import (
     InstagramUploader,
     UploadProgressCallback,
     UploadSummary,
+    YoutubeUploadSummary,
+    YoutubeUploader,
     ZernioClientError,
     create_zernio_client,
+    create_youtube_client,
+    count_pending_youtube_uploads,
     load_zernio_api_key,
 )
 from pipeline_runtime import QueueProgress, QueueProgressCallback
@@ -130,6 +134,21 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
         type=int,
         metavar="SECONDS",
         help="Override Instagram spacing between successful posts for this upload run.",
+    )
+    parser.add_argument(
+        "--upload-youtube",
+        action="store_true",
+        help="Upload eligible hooked ready MP4 files to the configured YouTube channel.",
+    )
+    parser.add_argument(
+        "--upload-youtube-one",
+        action="store_true",
+        help="Upload one eligible hooked ready MP4 file to the configured YouTube channel.",
+    )
+    parser.add_argument(
+        "--youtube-status",
+        action="store_true",
+        help="Show reusable YouTube credential, channel, source, and pending-upload status.",
     )
     parser.add_argument(
         "--cleanup",
@@ -227,6 +246,18 @@ def print_instagram_upload_summary(summary: UploadSummary) -> None:
     print(f"Found hooked MP4 files: {summary.found}")
     print(f"Drafts created: {summary.drafts}")
     print(f"Published now: {summary.published}")
+    print(f"Duplicates: {summary.duplicates}")
+    print(f"Skipped: {summary.skipped}")
+    print(f"Failed: {summary.failed}")
+    _print_queue_limit_notice(summary)
+
+
+def print_youtube_upload_summary(summary: YoutubeUploadSummary) -> None:
+    """Print a stable, safe summary after an explicit YouTube upload pass."""
+    print("YouTube Shorts upload")
+    print(f"Found: {summary.found}")
+    print(f"Eligible: {summary.eligible}")
+    print(f"Uploaded: {summary.uploaded}")
     print(f"Duplicates: {summary.duplicates}")
     print(f"Skipped: {summary.skipped}")
     print(f"Failed: {summary.failed}")
@@ -536,6 +567,77 @@ def run_instagram_uploader(
     return 1 if summary.failed else 0
 
 
+def run_youtube_status(config: CollectorConfig) -> int:
+    """Print read-only YouTube readiness without revealing credentials, tokens, or secret paths."""
+    if config.youtube_config is None:
+        print("YouTube status unavailable: config/youtube.json is missing.")
+        return 2
+    youtube = config.youtube_config
+    status = create_youtube_client(youtube).authentication_status(include_channel=True)
+    print("YouTube status")
+    print(f"Credentials available: {'yes' if status.credentials_available else 'no'}")
+    print(f"Reusable token available: {'yes' if status.token_available else 'no'}")
+    print(f"Reusable token valid: {'yes' if status.token_reusable else 'no'}")
+    print(f"Channel name: {status.channel.channel_name if status.channel else '(unavailable)'}")
+    print(f"Channel ID: {status.channel.channel_id if status.channel else '(unavailable)'}")
+    print(f"Configured source directory: {youtube.source_directory}")
+    print(
+        "Pending upload count: "
+        f"{count_pending_youtube_uploads(history_file=config.output_path('metadata') / 'youtube_upload_history.json', config=youtube)}"
+    )
+    if status.error:
+        print(f"Status detail: {status.error}")
+    return 0
+
+
+def run_youtube_uploader(
+    config: CollectorConfig,
+    *,
+    upload_one: bool,
+    process_all: bool,
+    queue_progress_callback: QueueProgressCallback | None = None,
+) -> int:
+    """Run the explicit hooked-Short uploader without changing Instagram or normal pipeline behavior."""
+    if config.youtube_config is None:
+        print("YouTube uploader not started: config/youtube.json is missing.")
+        return 2
+    if not config.youtube_config.enabled:
+        print("YouTube uploader not started: set enabled to true in config/youtube.json.")
+        return 2
+
+    def relay_progress(update: object) -> bool:
+        """Translate the reusable YouTube progress type into the existing worker progress type."""
+        if queue_progress_callback is None:
+            return True
+        current_file = getattr(update, "current_file", None)
+        phase = str(getattr(update, "phase", "uploading"))
+        message = "Waiting before the next YouTube upload." if phase == "waiting" else "Uploading YouTube Short."
+        return queue_progress_callback(
+            QueueProgress(
+                stage="Upload YouTube Shorts",
+                current_item=current_file.name if current_file is not None else None,
+                completed_count=int(getattr(update, "uploaded_count", 0)),
+                total_count=int(getattr(update, "total_uploads", 0)),
+                failed_count=int(getattr(update, "failed_count", 0)),
+                remaining_count=int(getattr(update, "remaining_uploads", 0)),
+                message=message,
+            )
+        ) is not False
+
+    summary = YoutubeUploader(
+        metadata_file=config.metadata_file,
+        history_file=config.output_path("metadata") / "youtube_upload_history.json",
+        config=config.youtube_config,
+        client=create_youtube_client(config.youtube_config),
+    ).run(
+        process_all=process_all,
+        maximum_uploads_override=1 if upload_one else None,
+        progress_callback=relay_progress if queue_progress_callback is not None else None,
+    )
+    print_youtube_upload_summary(summary)
+    return 1 if summary.failed else 0
+
+
 def _has_pipeline_stage_arguments(arguments: argparse.Namespace) -> bool:
     """Return whether cleanup was combined with another command that changes pipeline state."""
     return any(
@@ -549,6 +651,9 @@ def _has_pipeline_stage_arguments(arguments: argparse.Namespace) -> bool:
             arguments.upload_instagram,
             arguments.upload_one_instagram,
             arguments.publish_now,
+            arguments.upload_youtube,
+            arguments.upload_youtube_one,
+            arguments.youtube_status,
         )
     )
 
@@ -598,6 +703,21 @@ def main(
         print("Pipeline not started: --all cannot be combined with --upload-one-instagram.")
         return 2
     upload_requested = parsed_arguments.upload_instagram or parsed_arguments.upload_one_instagram
+    youtube_upload_requested = parsed_arguments.upload_youtube or parsed_arguments.upload_youtube_one
+    if parsed_arguments.upload_youtube and parsed_arguments.upload_youtube_one:
+        print("Pipeline not started: choose --upload-youtube or --upload-youtube-one.")
+        return 2
+    if parsed_arguments.all and parsed_arguments.upload_youtube_one:
+        print("Pipeline not started: --all cannot be combined with --upload-youtube-one.")
+        return 2
+    if parsed_arguments.youtube_status and youtube_upload_requested:
+        print("Pipeline not started: --youtube-status cannot be combined with a YouTube upload command.")
+        return 2
+    if (youtube_upload_requested or parsed_arguments.youtube_status) and (
+        upload_requested or parsed_arguments.list_zernio_accounts
+    ):
+        print("Pipeline not started: YouTube and Zernio publishing commands must run separately.")
+        return 2
     if parsed_arguments.publish_now and not upload_requested:
         print("Pipeline not started: --publish-now requires an Instagram upload command.")
         return 2
@@ -610,7 +730,7 @@ def main(
     if parsed_arguments.list_zernio_accounts and upload_requested:
         print("Pipeline not started: --list-zernio-accounts cannot be combined with an upload command.")
         return 2
-    if (parsed_arguments.list_zernio_accounts or upload_requested) and any(
+    if (parsed_arguments.list_zernio_accounts or upload_requested or youtube_upload_requested or parsed_arguments.youtube_status) and any(
         (
             parsed_arguments.download,
             parsed_arguments.format,
@@ -619,7 +739,7 @@ def main(
             parsed_arguments.debug_hook_flow is not None,
         )
     ):
-        print("Pipeline not started: Zernio commands must run separately from collection stages.")
+        print("Pipeline not started: publishing commands must run separately from collection stages.")
         return 2
     project_root = Path(__file__).resolve().parent
     if cleanup_requested:
@@ -638,6 +758,8 @@ def main(
 
     if parsed_arguments.list_zernio_accounts:
         return run_zernio_account_listing(project_root)
+    if parsed_arguments.youtube_status:
+        return run_youtube_status(config)
     if upload_requested:
         return run_instagram_uploader(
             config,
@@ -646,6 +768,13 @@ def main(
             process_all=parsed_arguments.all,
             publish_now=parsed_arguments.publish_now,
             post_delay=parsed_arguments.post_delay,
+            queue_progress_callback=progress_callback,
+        )
+    if youtube_upload_requested:
+        return run_youtube_uploader(
+            config,
+            upload_one=parsed_arguments.upload_youtube_one,
+            process_all=parsed_arguments.all,
             queue_progress_callback=progress_callback,
         )
 

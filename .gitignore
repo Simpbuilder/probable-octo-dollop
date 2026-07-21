@@ -19,11 +19,15 @@ ENV/
 logs/*
 !logs/.gitkeep
 
-# Generated metadata and local Zernio upload history
+# Generated metadata and local publishing history
 metadata/*.json
 metadata/runtime_status.json
 metadata/processed_urls.txt
 !metadata/.gitkeep
+
+# OAuth material remains local when users choose project-local credentials.
+client_secret.json
+token.json
 
 # Downloaded and generated video files
 *.mp4

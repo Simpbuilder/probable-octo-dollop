@@ -16,6 +16,7 @@ from .models import (
     InstagramConfig,
     PipelineMode,
     SourceConfig,
+    YoutubeConfig,
 )
 
 
@@ -61,6 +62,9 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
     instagram_config = _parse_instagram_config(
         _load_optional_json_object(config_directory / "instagram.json"), project_root
     )
+    youtube_config = _parse_youtube_config(
+        _load_optional_json_object(config_directory / "youtube.json"), project_root
+    )
 
     config = CollectorConfig(
         source_configs=source_configs,
@@ -71,6 +75,7 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
         formatter_config=formatter_config,
         hook_generation_config=hook_generation_config,
         instagram_config=instagram_config,
+        youtube_config=youtube_config,
         manual_urls_per_run=manual_urls_per_run,
     )
     _validate_collector_config(config)
@@ -347,6 +352,55 @@ def _parse_instagram_config(
         raise ConfigurationError(f"Invalid Instagram uploader settings: {error}") from error
 
 
+def _parse_youtube_config(
+    data: Mapping[str, Any] | None,
+    project_root: Path,
+) -> YoutubeConfig | None:
+    """Load optional YouTube Shorts settings while preserving older local configurations."""
+    if data is None:
+        return None
+    try:
+        return YoutubeConfig(
+            enabled=_required_bool(data, "enabled", "youtube.json"),
+            source_directory=_resolve_path(
+                _required_string(data, "source_directory", "youtube.json"), project_root
+            ),
+            privacy_status=_required_string(data, "privacy_status", "youtube.json"),  # type: ignore[arg-type]
+            category_id=_required_string(data, "category_id", "youtube.json"),
+            default_title_template=_required_string(
+                data, "default_title_template", "youtube.json"
+            ),
+            default_description=_required_text(data, "default_description", "youtube.json"),
+            tags=_optional_string_tuple(data, "tags", "youtube.json"),
+            maximum_uploads_per_run=_required_int(
+                data, "maximum_uploads_per_run", "youtube.json"
+            ),
+            delay_between_uploads_seconds=_optional_nonnegative_int(
+                data, "delay_between_uploads_seconds", "youtube.json", default=30
+            ),
+            move_after_upload=_required_bool(data, "move_after_upload", "youtube.json"),
+            posted_directory=_resolve_path(
+                _required_string(data, "posted_directory", "youtube.json"), project_root
+            ),
+            duplicate_check_enabled=_required_bool(
+                data, "duplicate_check_enabled", "youtube.json"
+            ),
+            made_for_kids=_required_bool(data, "made_for_kids", "youtube.json"),
+            oauth_client_credentials_file=_resolve_path(
+                _required_string(data, "oauth_client_credentials_file", "youtube.json"),
+                project_root,
+            ),
+            token_file=_resolve_path(
+                _required_string(data, "token_file", "youtube.json"), project_root
+            ),
+            external_history_file=_resolve_path(
+                _required_string(data, "external_history_file", "youtube.json"), project_root
+            ),
+        )
+    except ValueError as error:
+        raise ConfigurationError(f"Invalid YouTube uploader settings: {error}") from error
+
+
 def _validate_collector_config(config: CollectorConfig) -> None:
     """Apply cross-file validation after both configuration files are loaded."""
     if not config.enabled_sources:
@@ -385,6 +439,16 @@ def _validate_collector_config(config: CollectorConfig) -> None:
             raise ConfigurationError(
                 "instagram.posted_directory must match the posted output folder."
             )
+    if config.youtube_config is not None:
+        expected_source_directory = config.output_path("ready") / "hooked"
+        if config.youtube_config.source_directory != expected_source_directory:
+            raise ConfigurationError(
+                "youtube.source_directory must match the hooked ready output folder."
+            )
+        if config.youtube_config.posted_directory != config.output_path("posted"):
+            raise ConfigurationError(
+                "youtube.posted_directory must match the posted output folder."
+            )
 
 
 def _resolve_path(raw_path: str, project_root: Path) -> Path:
@@ -398,6 +462,14 @@ def _required_string(data: Mapping[str, Any], field_name: str, context: str) -> 
     value = data.get(field_name)
     if not isinstance(value, str) or not value.strip():
         raise ConfigurationError(f"{context} field '{field_name}' must be a non-empty string.")
+    return value
+
+
+def _required_text(data: Mapping[str, Any], field_name: str, context: str) -> str:
+    """Read a required string field that intentionally permits an empty user-facing value."""
+    value = data.get(field_name)
+    if not isinstance(value, str):
+        raise ConfigurationError(f"{context} field '{field_name}' must be a string.")
     return value
 
 

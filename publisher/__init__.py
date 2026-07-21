@@ -20,6 +20,16 @@ from .zernio_client import (
     create_zernio_client,
     load_zernio_api_key,
 )
+from .youtube import (
+    YoutubeAuthenticationStatus,
+    YoutubeClientError,
+    YoutubeDependencyError,
+    YoutubeUploadProgressCallback,
+    YoutubeUploadSummary,
+    YoutubeUploader,
+    count_pending_youtube_uploads,
+    create_youtube_client,
+)
 
 __all__ = [
     "append_post_history",
@@ -31,6 +41,14 @@ __all__ = [
     "estimate_batch_duration",
     "load_post_history",
     "load_zernio_api_key",
+    "YoutubeAuthenticationStatus",
+    "YoutubeClientError",
+    "YoutubeDependencyError",
+    "YoutubeUploadProgressCallback",
+    "YoutubeUploadSummary",
+    "YoutubeUploader",
+    "create_youtube_client",
+    "count_pending_youtube_uploads",
     "resolve_instagram_account",
     "resolve_post_delay",
     "UploadSummary",
