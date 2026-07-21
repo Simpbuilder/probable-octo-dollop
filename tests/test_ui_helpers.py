@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import ast
 import importlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from collector import load_collector_config
+from pipeline_runtime import RuntimeStatus
 from publisher.history import append_post_history, build_post_history_record
 from ui_helpers import (
     InstagramOverview,
@@ -18,6 +20,7 @@ from ui_helpers import (
     append_unique_urls,
     load_instagram_overview,
     load_pipeline_progress,
+    load_runtime_status,
     run_manual_import,
     run_pipeline_action,
     save_ui_configuration,
@@ -56,6 +59,35 @@ class UiHelperTests(unittest.TestCase):
         self.assertEqual(overview.account_username, "creator")
         self.assertTrue(callable(app.main))
         self.assertNotIn("InstagramOverview", app.__dict__)
+
+    def test_runtime_status_wrapper_delegates_to_the_canonical_recovery_safe_store(self) -> None:
+        """The compatibility helper does not parse state itself and handles missing or bad files safely."""
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.assertEqual(load_runtime_status(root), RuntimeStatus.idle())
+            status_file = root / "metadata" / "runtime_status.json"
+            status_file.parent.mkdir(parents=True)
+            status_file.write_text("not json", encoding="utf-8")
+            self.assertEqual(load_runtime_status(root), RuntimeStatus.idle())
+
+        expected = RuntimeStatus(status="running", job_id="job-1", stage="Download")
+        with patch("ui_helpers.load_runtime_status_file", return_value=expected) as loader:
+            self.assertEqual(load_runtime_status(PROJECT_ROOT), expected)
+        loader.assert_called_once_with(PROJECT_ROOT / "metadata" / "runtime_status.json")
+
+    def test_all_runtime_ui_helper_imports_in_app_exist(self) -> None:
+        """App startup cannot reference a stale public helper name after future UI refactors."""
+        ui_helpers = importlib.import_module("ui_helpers")
+        app_tree = ast.parse((PROJECT_ROOT / "app.py").read_text(encoding="utf-8"))
+        imported_names = {
+            alias.name
+            for node in ast.walk(app_tree)
+            if isinstance(node, ast.ImportFrom) and node.module == "ui_helpers"
+            for alias in node.names
+        }
+
+        self.assertTrue(imported_names)
+        self.assertTrue(all(hasattr(ui_helpers, name) for name in imported_names))
 
     def test_manual_import_delegates_to_existing_runner_function(self) -> None:
         """The URL import UI helper calls the runner's manual collector rather than parsing metadata itself."""

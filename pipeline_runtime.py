@@ -119,6 +119,11 @@ class RuntimeStatusStore:
         return self.update(mark_cancelling)
 
 
+def load_runtime_status(status_file: Path) -> RuntimeStatus:
+    """Load one runtime status file through the canonical recovery-safe store."""
+    return RuntimeStatusStore(status_file).load()
+
+
 @dataclass(frozen=True, slots=True)
 class QueueProgress:
     """An item-level progress event emitted by one existing queue implementation."""

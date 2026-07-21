@@ -28,6 +28,7 @@ from pipeline_runtime import (
     QueueProgress,
     RuntimeStatus,
     RuntimeStatusStore,
+    load_runtime_status as load_runtime_status_file,
 )
 from publisher import UploadProgressCallback, estimate_batch_duration
 from publisher.history import load_post_history
@@ -180,7 +181,7 @@ def runtime_status_file(project_root: Path) -> Path:
 
 def load_runtime_status(project_root: Path) -> RuntimeStatus:
     """Load safe idle status when the local runtime file has not been created yet."""
-    return RuntimeStatusStore(runtime_status_file(project_root)).load()
+    return load_runtime_status_file(runtime_status_file(project_root))
 
 
 def resolve_auto_refresh_interval(selection: str, status: RuntimeStatus) -> int | None:

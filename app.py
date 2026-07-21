@@ -12,6 +12,7 @@ import streamlit as st
 from cleanup import print_cleanup_plan
 from collector import ConfigurationError, load_collector_config
 from collector.models import CollectorConfig
+from pipeline_runtime import load_runtime_status as load_runtime_status_file
 from ui_helpers import (
     UiConfigurationValues,
     append_unique_urls,
@@ -29,7 +30,7 @@ from ui_helpers import (
     run_manual_import,
     run_instagram_upload_action,
     run_pipeline_action,
-    load_runtime_status,
+    runtime_status_file,
     request_background_job_stop,
     resolve_auto_refresh_interval,
     save_review_custom_hook,
@@ -138,7 +139,7 @@ def _render_sidebar(
             index=refresh_options.index(saved_refresh),
             key="refresh_selection",
         )
-    return page, resolve_auto_refresh_interval(selected_refresh, load_runtime_status(PROJECT_ROOT))
+    return page, resolve_auto_refresh_interval(selected_refresh, _load_runtime_status())
 
 
 def _render_header(counts: DashboardCounts) -> None:
@@ -158,11 +159,11 @@ def _render_header(counts: DashboardCounts) -> None:
 
 def _render_live_job_banner(refresh_interval: int | None) -> None:
     """Refresh a compact active-job banner on every page without rebuilding forms or navigation."""
-    status = load_runtime_status(PROJECT_ROOT)
+    status = _load_runtime_status()
 
     @st.fragment(run_every=refresh_interval if status.is_active and refresh_interval else None)
     def live_banner() -> None:
-        current = load_runtime_status(PROJECT_ROOT)
+        current = _load_runtime_status()
         if not current.is_active:
             if current.status in {"completed", "failed", "cancelled"}:
                 st.caption(f"Last batch: {current.last_message}")
@@ -189,7 +190,7 @@ def _render_live_job_banner(refresh_interval: int | None) -> None:
 
 def _render_live_dashboard(refresh_interval: int | None) -> None:
     """Keep dashboard counts fresh during a worker run while idle pages avoid polling."""
-    status = load_runtime_status(PROJECT_ROOT)
+    status = _load_runtime_status()
 
     @st.fragment(run_every=refresh_interval if status.is_active and refresh_interval else None)
     def live_dashboard() -> None:
@@ -234,6 +235,11 @@ def _estimated_remaining(status: object) -> str:
     remaining_seconds = round(elapsed / completed * (total - completed))
     minutes, seconds = divmod(remaining_seconds, 60)
     return f"{minutes:02d}:{seconds:02d}"
+
+
+def _load_runtime_status():
+    """Read canonical runtime state without depending on a UI helper import at startup."""
+    return load_runtime_status_file(runtime_status_file(PROJECT_ROOT))
 
 
 def _render_dashboard(
@@ -308,7 +314,7 @@ def _render_dependency_status() -> None:
 
 def _render_pipeline_actions(progress: PipelineProgress, instagram: InstagramOverview) -> None:
     """Group existing CLI actions by workflow stage and disable empty queues."""
-    job_is_active = load_runtime_status(PROJECT_ROOT).is_active
+    job_is_active = _load_runtime_status().is_active
     with st.container(border=True):
         st.subheader("Run pipeline", anchor=False)
         st.caption("Actions reuse the established CLI stages. Nothing publishes without an explicit confirmation.")
@@ -533,7 +539,7 @@ def _render_ready_videos(config: CollectorConfig) -> None:
 
 def _render_instagram(config: CollectorConfig, instagram: InstagramOverview) -> None:
     """Present connected-account context and explicit draft-first controls without remote calls."""
-    job_is_active = load_runtime_status(PROJECT_ROOT).is_active
+    job_is_active = _load_runtime_status().is_active
     st.subheader("Instagram", anchor=False)
     account, mode, pending, history = st.columns(4)
     account.metric("Connected account", f"@{instagram.account_username or 'not configured'}", border=True)
