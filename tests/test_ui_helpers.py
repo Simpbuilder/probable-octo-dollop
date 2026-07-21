@@ -32,6 +32,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 EXPECTED_APP_UI_IMPORT_PARAMETERS = {
     "append_unique_urls": ("input_file", "raw_text"),
+    "delete_ready_video": ("config", "clip_id"),
+    "load_archive_overview": ("config",),
     "load_dashboard_counts": ("project_root",),
     "load_failed_items": ("config",),
     "load_instagram_overview": ("config",),

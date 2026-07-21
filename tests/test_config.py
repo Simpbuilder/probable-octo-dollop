@@ -67,6 +67,13 @@ class CollectorConfigTests(unittest.TestCase):
             PROJECT_ROOT / "client_secret.json",
         )
         self.assertEqual(config.youtube_config.token_file, PROJECT_ROOT / "token.json")
+        self.assertIsNotNone(config.archive_config)
+        self.assertTrue(config.archive_config.enabled)
+        self.assertEqual(
+            config.archive_config.archive_directory,
+            PROJECT_ROOT / "clips" / "archive" / "hooked",
+        )
+        self.assertTrue(config.archive_config.verify_copy)
 
     def test_rejects_enabled_reddit_without_subreddits(self) -> None:
         """Validation catches a missing Reddit target list before a run starts."""

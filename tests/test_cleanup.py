@@ -65,6 +65,7 @@ class CleanupTests(unittest.TestCase):
             "clips/rejected",
             "clips/ready/plain",
             "clips/ready/hooked",
+            "clips/archive/hooked",
             "clips/posted",
             "metadata",
             "logs",
@@ -93,6 +94,7 @@ class CleanupTests(unittest.TestCase):
             encoding="utf-8",
         )
         (root / "clips" / "posted" / "posted.mp4").write_bytes(b"posted")
+        (root / "clips" / "archive" / "hooked" / "archived.mp4").write_bytes(b"archive")
         return root
 
     def test_safe_cleanup_only_deletes_temporary_artifacts(self) -> None:
@@ -129,6 +131,7 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue((root / "metadata" / "zernio_post_history.json").is_file())
         self.assertTrue((root / "metadata" / "youtube_upload_history.json").is_file())
         self.assertTrue((root / "clips" / "posted" / "posted.mp4").is_file())
+        self.assertTrue((root / "clips" / "archive" / "hooked" / "archived.mp4").is_file())
         clips = {clip.unique_id: clip for clip in load_all_clip_metadata(metadata_file)}
         self.assertEqual(clips["source"].download_status, "downloaded")
         self.assertEqual(clips["empty"].download_status, "pending")
@@ -183,6 +186,7 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue((root / "metadata" / "zernio_post_history.json").is_file())
         self.assertTrue((root / "metadata" / "youtube_upload_history.json").is_file())
         self.assertTrue((root / "clips" / "posted" / "posted.mp4").is_file())
+        self.assertTrue((root / "clips" / "archive" / "hooked" / "archived.mp4").is_file())
         clips = {clip.unique_id: clip for clip in load_all_clip_metadata(metadata_file)}
         self.assertEqual(clips["pending"].download_status, "pending")
         self.assertIsNone(clips["pending"].local_file_path)
@@ -226,6 +230,8 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue((root / "metadata" / "zernio_post_history.json").is_file())
         self.assertTrue((root / "metadata" / "youtube_upload_history.json").is_file())
         self.assertTrue((root / "clips" / "posted" / "posted.mp4").is_file())
+        self.assertTrue((root / "clips" / "archive" / "hooked" / "archived.mp4").is_file())
+        self.assertIn("Archived hooked videos will be preserved.", output)
 
     def test_cleanup_cli_routes_to_the_shared_cleanup_command(self) -> None:
         """New cleanup flags are isolated from collection and delegate to the reusable cleanup runner."""

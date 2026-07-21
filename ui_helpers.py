@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 from typing import Any, Mapping, Sequence
 
 from cleanup import CleanupPlan, execute_cleanup_plan, plan_cleanup
+from archive import ArchiveManager, ReadyDeletionResult
 from collector import ConfigurationError, load_all_clip_metadata, load_collector_config
 from collector.manual_url_collector import InvalidManualUrlError, normalize_manual_url
 from collector.models import ClipMetadata, CollectorConfig
@@ -28,6 +29,7 @@ from publisher.youtube import count_pending_youtube_uploads, create_youtube_clie
 from publisher.youtube.history import load_youtube_history
 from ui_models import (
     DashboardCounts,
+    ArchiveOverview,
     FailedItem,
     InstagramOverview,
     PipelineActionResult,
@@ -349,9 +351,43 @@ def load_ready_videos(config: CollectorConfig) -> list[ReadyVideo]:
                 selected_hook=clip.selected_hook if clip is not None else None,
                 processing_status=clip.processing_status if clip is not None else "untracked",
                 upload_status=history_by_filename.get(path.name, "not uploaded"),
+                clip_id=clip.unique_id if clip is not None else None,
+                archive_status=clip.archive_status if clip is not None else None,
             )
         )
     return videos
+
+
+def load_archive_overview(config: CollectorConfig) -> ArchiveOverview:
+    """Summarize local archive state only; no formatting, copying, or remote calls occur here."""
+    archive_config = config.archive_config
+    clips = load_all_clip_metadata(config.metadata_file)
+    if archive_config is None:
+        return ArchiveOverview(False, 0, 0, 0, None)
+    archive_files = _direct_media_files(archive_config.archive_directory)
+    return ArchiveOverview(
+        enabled=archive_config.enabled,
+        archived_videos=sum(clip.archive_status == "archived" for clip in clips),
+        missing_archives=sum(
+            clip.archive_status == "archived"
+            and (clip.archive_path is None or not Path(clip.archive_path).is_file())
+            for clip in clips
+        ),
+        failed_archives=sum(clip.archive_status == "failed" for clip in clips),
+        archive_directory=archive_config.archive_directory,
+        total_size_bytes=sum(path.stat().st_size for path in archive_files),
+    )
+
+
+def delete_ready_video(config: CollectorConfig, clip_id: str) -> ReadyDeletionResult:
+    """Call the guarded deletion service; this never targets source, archive, or upload history files."""
+    if config.archive_config is None or config.formatter_config is None:
+        return ReadyDeletionResult(clip_id, deleted=False, error="Archive or formatter configuration is missing.")
+    return ArchiveManager(
+        metadata_file=config.metadata_file,
+        ready_directory=config.formatter_config.output_directory,
+        config=config.archive_config,
+    ).delete_ready_output(clip_id)
 
 
 def load_ui_configuration(config: CollectorConfig) -> UiConfigurationValues:

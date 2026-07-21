@@ -4,6 +4,7 @@ from .config import ConfigurationError, load_collector_config
 from .collector import CollectionSummary, RedditMetadataCollector
 from .manual_url_collector import ManualUrlCollector, ManualUrlSummary
 from .models import (
+    ArchiveConfig,
     ClipMetadata,
     CollectorConfig,
     DownloaderConfig,
@@ -32,6 +33,7 @@ from .storage import (
 
 __all__ = [
     "ClipMetadata",
+    "ArchiveConfig",
     "CollectionSummary",
     "CollectorConfig",
     "ConfigurationError",

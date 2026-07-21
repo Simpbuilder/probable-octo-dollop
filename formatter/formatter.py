@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 
 from collector.models import ClipMetadata, FormatterConfig
 from collector.storage import load_all_clip_metadata, update_clip_metadata
+from archive import ArchiveManager
 from pipeline_runtime import QueueProgress, QueueProgressCallback
 
 from .ffmpeg_client import FfmpegClientError, FfmpegClientProtocol
@@ -36,6 +37,7 @@ class PendingClipFormatter:
         ffmpeg_client: FfmpegClientProtocol,
         *,
         hook_renderer: HookRendererProtocol | None = None,
+        archive_manager: ArchiveManager | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         """Set up metadata, layout settings, and injectable media-rendering adapters."""
@@ -43,6 +45,7 @@ class PendingClipFormatter:
         self._config = config
         self._ffmpeg_client = ffmpeg_client
         self._hook_renderer = hook_renderer or PillowHookRenderer()
+        self._archive_manager = archive_manager
         self._logger = logger or logging.getLogger(__name__)
 
     def run(
@@ -51,6 +54,7 @@ class PendingClipFormatter:
         manual_hook: str | None = None,
         include_ready_for_manual_hook: bool = False,
         process_all: bool = False,
+        clip_ids: frozenset[str] | None = None,
         progress_callback: QueueProgressCallback | None = None,
     ) -> FormatSummary:
         """Format eligible downloads, optionally validating one explicit manual hook override."""
@@ -68,6 +72,8 @@ class PendingClipFormatter:
             manual_hook=manual_hook,
             include_ready_for_manual_hook=include_ready_for_manual_hook,
         )
+        if clip_ids is not None:
+            eligible_clips = [clip for clip in eligible_clips if clip.unique_id in clip_ids]
         summary.pending = len(eligible_clips)
         summary.eligible = len(eligible_clips)
         summary.processing = len(eligible_clips) if process_all else min(
@@ -289,21 +295,30 @@ class PendingClipFormatter:
         )
         if not formatted_file_path.is_file():
             raise FfmpegClientError("Formatter reported success but the ready output file is missing.")
+        updated_clip = replace(
+            clip,
+            formatted_file_path=formatted_file_path,
+            formatted_width=self._config.output_width,
+            formatted_height=self._config.output_height,
+            processing_status="ready",
+            format_error=None,
+            hook_text=hook_result.text,
+            hook_status=hook_result.status,
+            hook_source=hook_result.source,
+            hook_error=hook_result.error,
+        )
         update_clip_metadata(
             self._metadata_file,
-            replace(
-                clip,
-                formatted_file_path=formatted_file_path,
-                formatted_width=self._config.output_width,
-                formatted_height=self._config.output_height,
-                processing_status="ready",
-                format_error=None,
-                hook_text=hook_result.text,
-                hook_status=hook_result.status,
-                hook_source=hook_result.source,
-                hook_error=hook_result.error,
-            ),
+            updated_clip,
         )
+        if self._archive_manager is not None and hook_result.status == "rendered":
+            archive_result = self._archive_manager.archive_formatted_clip(updated_clip)
+            if archive_result.error is not None:
+                self._logger.warning(
+                    "Formatting succeeded but archive failed for %s: %s",
+                    clip.unique_id,
+                    archive_result.error,
+                )
 
     def _record_pending_issue(
         self,

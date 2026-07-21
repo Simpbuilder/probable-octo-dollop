@@ -14,6 +14,7 @@ PipelineMode = Literal["reddit_api", "manual_urls", "both"]
 InstagramPublishMode = Literal["draft", "publish_now"]
 YoutubePrivacyStatus = Literal["public", "private", "unlisted"]
 YoutubeUploadStatus = Literal["uploaded", "failed"]
+ArchiveStatus = Literal["archived", "failed"]
 CropMode = Literal["fit"]
 HookStatus = Literal["rendered", "skipped", "failed"]
 HookSource = Literal["manual", "source_title", "generated"]
@@ -84,6 +85,7 @@ class CollectorConfig:
     hook_generation_config: "HookGenerationConfig | None" = None
     instagram_config: "InstagramConfig | None" = None
     youtube_config: "YoutubeConfig | None" = None
+    archive_config: "ArchiveConfig | None" = None
     manual_urls_per_run: int = 50
 
     def __post_init__(self) -> None:
@@ -150,6 +152,17 @@ class ClipMetadata:
     youtube_uploaded_at: datetime | None = None
     youtube_title: str | None = None
     youtube_privacy_status: YoutubePrivacyStatus | None = None
+    archive_status: ArchiveStatus | None = None
+    archive_path: Path | None = None
+    archive_created_at: datetime | None = None
+    archive_hash: str | None = None
+    archive_error: str | None = None
+    recreation_count: int = 0
+    last_recreated_at: datetime | None = None
+    last_recreated_output_path: Path | None = None
+    recreation_error: str | None = None
+    deleted_at: datetime | None = None
+    deleted_by_user: bool = False
 
     def __post_init__(self) -> None:
         """Validate stable metadata before it is written to storage."""
@@ -242,6 +255,22 @@ class ClipMetadata:
             "unlisted",
         }:
             raise ValueError("youtube_privacy_status is not supported.")
+        if self.archive_status is not None and self.archive_status not in {"archived", "failed"}:
+            raise ValueError("archive_status is not supported.")
+        if self.archive_created_at is not None and self.archive_created_at.tzinfo is None:
+            raise ValueError("archive_created_at must include timezone information when provided.")
+        if self.archive_hash is not None and not self.archive_hash.strip():
+            raise ValueError("archive_hash must be a non-empty string or null.")
+        if self.archive_error is not None and not self.archive_error.strip():
+            raise ValueError("archive_error must be a non-empty string or null.")
+        if self.recreation_count < 0:
+            raise ValueError("recreation_count must be zero or greater.")
+        if self.last_recreated_at is not None and self.last_recreated_at.tzinfo is None:
+            raise ValueError("last_recreated_at must include timezone information when provided.")
+        if self.recreation_error is not None and not self.recreation_error.strip():
+            raise ValueError("recreation_error must be a non-empty string or null.")
+        if self.deleted_at is not None and self.deleted_at.tzinfo is None:
+            raise ValueError("deleted_at must include timezone information when provided.")
 
     def to_dict(self) -> dict[str, object]:
         """Serialize the record to JSON-compatible primitives."""
@@ -292,6 +321,25 @@ class ClipMetadata:
             ),
             "youtube_title": self.youtube_title,
             "youtube_privacy_status": self.youtube_privacy_status,
+            "archive_status": self.archive_status,
+            "archive_path": str(self.archive_path) if self.archive_path else None,
+            "archive_created_at": (
+                self.archive_created_at.isoformat() if self.archive_created_at else None
+            ),
+            "archive_hash": self.archive_hash,
+            "archive_error": self.archive_error,
+            "recreation_count": self.recreation_count,
+            "last_recreated_at": (
+                self.last_recreated_at.isoformat() if self.last_recreated_at else None
+            ),
+            "last_recreated_output_path": (
+                str(self.last_recreated_output_path)
+                if self.last_recreated_output_path
+                else None
+            ),
+            "recreation_error": self.recreation_error,
+            "deleted_at": self.deleted_at.isoformat() if self.deleted_at else None,
+            "deleted_by_user": self.deleted_by_user,
         }
 
     @classmethod
@@ -344,6 +392,17 @@ class ClipMetadata:
             youtube_privacy_status=_optional_string(
                 data, "youtube_privacy_status"
             ),  # type: ignore[arg-type]
+            archive_status=_optional_string(data, "archive_status"),  # type: ignore[arg-type]
+            archive_path=_optional_path(data, "archive_path"),
+            archive_created_at=_optional_datetime(data, "archive_created_at"),
+            archive_hash=_optional_string(data, "archive_hash"),
+            archive_error=_optional_string(data, "archive_error"),
+            recreation_count=_optional_int(data, "recreation_count") or 0,
+            last_recreated_at=_optional_datetime(data, "last_recreated_at"),
+            last_recreated_output_path=_optional_path(data, "last_recreated_output_path"),
+            recreation_error=_optional_string(data, "recreation_error"),
+            deleted_at=_optional_datetime(data, "deleted_at"),
+            deleted_by_user=_optional_bool(data, "deleted_by_user") or False,
         )
 
 
@@ -500,6 +559,24 @@ class YoutubeConfig:
             self.external_history_file,
         )):
             raise ValueError("youtube OAuth and history paths must name files.")
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveConfig:
+    """Validated settings for the immutable local hooked-video archive."""
+
+    archive_directory: Path = Path("clips/archive/hooked")
+    enabled: bool = True
+    copy_on_success: bool = True
+    overwrite_existing: bool = False
+    preserve_original_filename: bool = True
+    verify_copy: bool = True
+    archive_hash_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        """Require a concrete local directory without making filesystem changes."""
+        if not self.archive_directory.name:
+            raise ValueError("archive directory must name a folder.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -674,6 +751,16 @@ def _optional_path(data: Mapping[str, object], field_name: str) -> Path | None:
     if not isinstance(value, str):
         raise ValueError(f"{field_name} must be a path string or null.")
     return Path(value)
+
+
+def _optional_bool(data: Mapping[str, object], field_name: str) -> bool | None:
+    """Read a nullable boolean metadata field without coercing arbitrary values."""
+    value = data.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean or null.")
+    return value
 
 
 def _optional_string_tuple(data: Mapping[str, object], field_name: str) -> tuple[str, ...]:

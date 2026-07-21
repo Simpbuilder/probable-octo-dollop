@@ -26,6 +26,7 @@ class CleanupManager:
         """Resolve the project root once so every candidate path can be constrained to it."""
         self._project_root = Path(project_root).resolve()
         self._metadata_file = self._project_root / "metadata" / "clips.json"
+        self._archive_directory = self._project_root / "clips" / "archive"
 
     def plan(self, mode: CleanupMode = "safe") -> CleanupPlan:
         """Return a non-destructive preview for the requested supported cleanup mode."""
@@ -131,7 +132,7 @@ class CleanupManager:
         )
 
     def _iter_files(self, directory: Path) -> Iterable[Path]:
-        """Yield normal files under an approved project directory without following escapes."""
+        """Yield normal files under approved directories while permanently excluding the archive."""
         directory = Path(directory)
         if not directory.is_dir():
             return ()
@@ -140,9 +141,13 @@ class CleanupManager:
             if not path.is_file() or ".git" in path.parts:
                 continue
             try:
-                files.append(ensure_path_is_within_directory(path, self._project_root))
+                validated_path = ensure_path_is_within_directory(path, self._project_root)
             except ValueError:
                 continue
+            try:
+                validated_path.relative_to(self._archive_directory)
+            except ValueError:
+                files.append(validated_path)
         return files
 
     def _iter_cache_directories(self) -> Iterable[Path]:
@@ -317,6 +322,8 @@ def run_cleanup_command(
         output_func(f"Cleanup not started: {error}")
         return 2
     print_cleanup_plan(plan, output_func)
+    if reset_project:
+        output_func("Archived hooked videos will be preserved.")
     if dry_run:
         output_func("Dry run complete. No files were changed.")
         return 0

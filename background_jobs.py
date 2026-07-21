@@ -25,6 +25,8 @@ _JOB_ACTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
         "Publish Instagram",
         ("--upload-instagram", "--publish-now", "--all"),
     ),
+    "archive_missing": ("Archive hooked videos", ("--archive-missing",)),
+    "verify_archive": ("Verify hooked archive", ("--verify-archive",)),
 }
 
 
@@ -39,6 +41,16 @@ def start_background_pipeline_job(project_root: Path, job: str) -> RuntimeStatus
         raise ValueError(f"Unknown background pipeline job: {job}")
     resolved_root = Path(project_root).resolve()
     stage, arguments = _JOB_ACTIONS[job]
+    return start_background_pipeline_command(resolved_root, stage, arguments)
+
+
+def start_background_pipeline_command(
+    project_root: Path,
+    stage: str,
+    arguments: tuple[str, ...],
+) -> RuntimeStatus:
+    """Run an explicit CLI command in the existing cancellable local worker machinery."""
+    resolved_root = Path(project_root).resolve()
     manager = _background_job_manager(resolved_root)
 
     def runner(context) -> int:

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .models import (
+    ArchiveConfig,
     CollectorConfig,
     DEFAULT_BLOCKED_HOOK_PHRASES,
     DownloaderConfig,
@@ -65,6 +66,9 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
     youtube_config = _parse_youtube_config(
         _load_optional_json_object(config_directory / "youtube.json"), project_root
     )
+    archive_config = _parse_archive_config(
+        _load_optional_json_object(config_directory / "archive.json"), project_root
+    )
 
     config = CollectorConfig(
         source_configs=source_configs,
@@ -76,6 +80,7 @@ def load_collector_config(config_directory: Path) -> CollectorConfig:
         hook_generation_config=hook_generation_config,
         instagram_config=instagram_config,
         youtube_config=youtube_config,
+        archive_config=archive_config,
         manual_urls_per_run=manual_urls_per_run,
     )
     _validate_collector_config(config)
@@ -229,6 +234,31 @@ def _parse_formatter_config(
         )
     except ValueError as error:
         raise ConfigurationError(f"Invalid formatter settings: {error}") from error
+
+
+def _parse_archive_config(
+    data: Mapping[str, Any] | None,
+    project_root: Path,
+) -> ArchiveConfig | None:
+    """Load optional permanent hooked-output archive settings without touching old projects."""
+    if data is None:
+        return None
+    try:
+        return ArchiveConfig(
+            archive_directory=_resolve_path(
+                _required_string(data, "archive_directory", "archive.json"), project_root
+            ),
+            enabled=_required_bool(data, "enabled", "archive.json"),
+            copy_on_success=_required_bool(data, "copy_on_success", "archive.json"),
+            overwrite_existing=_required_bool(data, "overwrite_existing", "archive.json"),
+            preserve_original_filename=_required_bool(
+                data, "preserve_original_filename", "archive.json"
+            ),
+            verify_copy=_required_bool(data, "verify_copy", "archive.json"),
+            archive_hash_enabled=_required_bool(data, "archive_hash_enabled", "archive.json"),
+        )
+    except ValueError as error:
+        raise ConfigurationError(f"Invalid archive settings: {error}") from error
 
 
 def _parse_hook_config(data: Mapping[str, Any], project_root: Path) -> HookConfig:
@@ -429,6 +459,12 @@ def _validate_collector_config(config: CollectorConfig) -> None:
         and config.formatter_config.output_directory != config.output_path("ready")
     ):
         raise ConfigurationError("formatter.output_directory must match the ready output folder.")
+    if config.archive_config is not None:
+        expected_archive_directory = config.output_path("ready").parent / "archive" / "hooked"
+        if config.archive_config.archive_directory != expected_archive_directory:
+            raise ConfigurationError(
+                "archive.archive_directory must match clips/archive/hooked."
+            )
     if config.instagram_config is not None:
         expected_source_directory = config.output_path("ready") / "hooked"
         if config.instagram_config.source_directory != expected_source_directory:

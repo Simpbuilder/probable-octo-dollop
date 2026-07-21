@@ -46,6 +46,8 @@ from publisher import (
 )
 from pipeline_runtime import QueueProgress, QueueProgressCallback
 from cleanup import run_cleanup_command
+from archive import ArchiveManager
+from archive.recreation import ClipRecreationService
 
 from collector import (
     CollectionSummary,
@@ -58,7 +60,8 @@ from collector import (
     load_collector_config,
     load_reddit_credentials,
 )
-from collector.models import CollectorConfig, PipelineMode
+from collector.models import ClipMetadata, CollectorConfig, PipelineMode
+from collector.storage import load_all_clip_metadata
 from collector.reddit_client import RedditClientError
 
 
@@ -158,6 +161,31 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
         help="Open Google OAuth in a browser and save a root-level reusable YouTube token.",
     )
     parser.add_argument(
+        "--archive-missing",
+        action="store_true",
+        help="Copy eligible hooked ready videos missing from the permanent local archive.",
+    )
+    parser.add_argument(
+        "--verify-archive",
+        action="store_true",
+        help="Read and verify permanent archive records without changing video files.",
+    )
+    parser.add_argument(
+        "--list-recreatable",
+        action="store_true",
+        help="List clips that can be explicitly recreated without uploading anything.",
+    )
+    parser.add_argument(
+        "--recreate",
+        metavar="CLIP_ID",
+        help="Recreate one hooked ready video from its saved metadata and source media.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow --recreate to overwrite its existing routed ready output.",
+    )
+    parser.add_argument(
         "--cleanup",
         action="store_true",
         help="Remove only clearly temporary pipeline files.",
@@ -180,7 +208,7 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="Skip the YES prompt for --cleanup --all-temporary. It never bypasses RESET.",
+        help="Skip the confirmation for --cleanup --all-temporary or one explicit --recreate. It never bypasses RESET.",
     )
     return parser.parse_args(arguments)
 
@@ -420,6 +448,7 @@ def run_pending_clip_formatter(
     manual_hook: str | None = None,
     include_ready_for_manual_hook: bool = False,
     process_all: bool = False,
+    clip_ids: frozenset[str] | None = None,
     progress_callback: QueueProgressCallback | None = None,
 ) -> int:
     """Run the FFmpeg formatter and report missing local tools without a traceback."""
@@ -435,14 +464,17 @@ def run_pending_clip_formatter(
         )
 
     try:
+        archive_manager = _archive_manager(config)
         summary = PendingClipFormatter(
             metadata_file=config.metadata_file,
             config=formatter_config,
             ffmpeg_client=FfmpegClient(),
+            archive_manager=archive_manager,
         ).run(
             manual_hook=manual_hook,
             include_ready_for_manual_hook=include_ready_for_manual_hook,
             process_all=process_all,
+            clip_ids=clip_ids,
             progress_callback=progress_callback,
         )
     except FfmpegDependencyError as error:
@@ -453,6 +485,141 @@ def run_pending_clip_formatter(
         return 2
     print_format_summary(summary)
     return 1 if summary.failed else 0
+
+
+def _archive_manager(config: CollectorConfig, *, overwrite_existing: bool = False) -> ArchiveManager | None:
+    """Build the optional archive service only when all existing local paths are configured."""
+    if config.archive_config is None or config.formatter_config is None:
+        return None
+    return ArchiveManager(
+        metadata_file=config.metadata_file,
+        ready_directory=config.formatter_config.output_directory,
+        config=replace(config.archive_config, overwrite_existing=overwrite_existing),
+    )
+
+
+def run_archive_missing(config: CollectorConfig) -> int:
+    """Repair only absent hooked archive copies without rendering, downloading, or uploading."""
+    manager = _archive_manager(config)
+    if manager is None:
+        print("Archive command not started: config/archive.json or formatter configuration is missing.")
+        return 2
+    summary = manager.archive_missing()
+    print("Hooked video archive")
+    print(f"Eligible: {summary.eligible}")
+    print(f"Archived: {summary.archived}")
+    print(f"Skipped: {summary.skipped}")
+    print(f"Failed: {summary.failed}")
+    return 1 if summary.failed else 0
+
+
+def run_verify_archive(config: CollectorConfig) -> int:
+    """Report archive integrity findings without mutating video or metadata files."""
+    manager = _archive_manager(config)
+    if manager is None:
+        print("Archive command not started: config/archive.json or formatter configuration is missing.")
+        return 2
+    verification = manager.verify_archive()
+    print("Hooked video archive verification")
+    print(f"Checked: {verification.checked}")
+    print(f"Verified: {verification.verified}")
+    print(f"Missing: {verification.missing}")
+    print(f"Mismatched: {verification.mismatched}")
+    print(f"Untracked files: {verification.untracked_files}")
+    for finding in verification.findings:
+        print(f"- {finding}")
+    return 1 if verification.missing or verification.mismatched else 0
+
+
+def list_recreatable_clips(config: CollectorConfig) -> int:
+    """Print one local-only list of known clips that retain source URL metadata for recreation."""
+    if config.formatter_config is None:
+        print("Recreatable clips unavailable: formatter configuration is missing.")
+        return 2
+    clips = [clip for clip in load_all_clip_metadata(config.metadata_file) if _is_recreatable(clip)]
+    print("Recreatable clips")
+    if not clips:
+        print("(none)")
+        return 0
+    for clip in clips:
+        source_state = "source available" if _source_file_exists(clip) else "re-download required"
+        archive_state = clip.archive_status or "not archived"
+        print(f"{clip.unique_id}: {source_state}; archive {archive_state}; {clip.title}")
+    return 0
+
+
+def print_recreation_preview(config: CollectorConfig, clip_id: str) -> int:
+    """Show exact local metadata used for an explicit recreation before requesting confirmation."""
+    clip = next(
+        (candidate for candidate in load_all_clip_metadata(config.metadata_file) if candidate.unique_id == clip_id),
+        None,
+    )
+    if clip is None:
+        print(f"Recreation not started: clip metadata was not found: {clip_id}")
+        return 2
+    print("Recreation preview")
+    print(f"Clip ID: {clip.unique_id}")
+    print(f"Title: {clip.title}")
+    print(f"Selected hook: {clip.selected_hook or clip.hook_text or '(none)'}")
+    print(f"Source URL: {clip.source_url}")
+    print(f"Source file exists: {'yes' if _source_file_exists(clip) else 'no'}")
+    print(f"Archive path: {clip.archive_path or '(none)'}")
+    return 0 if _is_recreatable(clip) else 2
+
+
+def _source_file_exists(clip: ClipMetadata) -> bool:
+    """Treat only a real stored local source as reusable; absent paths trigger the normal downloader."""
+    return clip.local_file_path is not None and Path(clip.local_file_path).is_file()
+
+
+def _is_recreatable(clip: ClipMetadata) -> bool:
+    """Keep automatic work impossible: a recreation needs saved hook data and a recoverable source."""
+    return bool((clip.selected_hook or clip.hook_text) and (clip.source_url.strip() or _source_file_exists(clip)))
+
+
+def run_clip_recreation(config: CollectorConfig, clip_id: str, *, force: bool) -> int:
+    """Recreate exactly one clip through existing local media services and never upload it."""
+    if config.downloader_config is None or config.formatter_config is None:
+        print("Recreation not started: downloader or formatter configuration is missing.")
+        return 2
+    clip = next(
+        (candidate for candidate in load_all_clip_metadata(config.metadata_file) if candidate.unique_id == clip_id),
+        None,
+    )
+    if clip is None or not _is_recreatable(clip):
+        print("Recreation not started: the clip needs a selected/manual hook and a source URL or local source file.")
+        return 2
+    manager = _archive_manager(config, overwrite_existing=force)
+    if manager is None:
+        print("Recreation not started: config/archive.json is missing.")
+        return 2
+    try:
+        downloader = PendingClipDownloader(
+            metadata_file=config.metadata_file,
+            config=config.downloader_config,
+            media_client=create_yt_dlp_client(),
+        )
+        formatter = PendingClipFormatter(
+            metadata_file=config.metadata_file,
+            config=replace(config.formatter_config, overwrite=force),
+            ffmpeg_client=FfmpegClient(),
+            archive_manager=manager,
+        )
+        result = ClipRecreationService(
+            config.metadata_file,
+            downloader,
+            formatter,
+            manager,
+        ).recreate(clip_id, force=force)
+    except (YtDlpDependencyError, FfmpegDependencyError, FfmpegClientError, YtDlpClientError) as error:
+        print(f"Recreation not started: {error}")
+        return 2
+    if result.archived:
+        print(f"Recreated and archived: {clip_id}")
+        print(f"Ready output: {result.archive_path}")
+        return 0
+    print(f"Recreation failed for {clip_id}: {result.error or 'unknown error'}")
+    return 1
 
 
 def run_pending_hook_generator(
@@ -681,6 +848,10 @@ def _has_pipeline_stage_arguments(arguments: argparse.Namespace) -> bool:
             arguments.upload_youtube_one,
             arguments.youtube_status,
             arguments.youtube_login,
+            arguments.archive_missing,
+            arguments.verify_archive,
+            arguments.list_recreatable,
+            arguments.recreate is not None,
         )
     )
 
@@ -700,8 +871,10 @@ def main(
     if parsed_arguments.dry_run and not cleanup_requested:
         print("Pipeline not started: --dry-run requires --cleanup or --reset-project.")
         return 2
-    if parsed_arguments.yes and not parsed_arguments.all_temporary:
-        print("Pipeline not started: --yes requires --cleanup --all-temporary.")
+    if parsed_arguments.yes and not (
+        parsed_arguments.all_temporary or parsed_arguments.recreate is not None
+    ):
+        print("Pipeline not started: --yes requires --cleanup --all-temporary or --recreate.")
         return 2
     if parsed_arguments.reset_project and (
         parsed_arguments.cleanup or parsed_arguments.all_temporary or parsed_arguments.yes
@@ -710,6 +883,36 @@ def main(
         return 2
     if cleanup_requested and _has_pipeline_stage_arguments(parsed_arguments):
         print("Pipeline not started: cleanup commands must run separately from pipeline stages.")
+        return 2
+    archive_command_requested = any(
+        (
+            parsed_arguments.archive_missing,
+            parsed_arguments.verify_archive,
+            parsed_arguments.list_recreatable,
+            parsed_arguments.recreate is not None,
+        )
+    )
+    if parsed_arguments.force and parsed_arguments.recreate is None:
+        print("Pipeline not started: --force requires --recreate CLIP_ID.")
+        return 2
+    if parsed_arguments.recreate is not None and not parsed_arguments.recreate.strip():
+        print("Pipeline not started: --recreate requires a clip ID.")
+        return 2
+    if archive_command_requested and any(
+        (
+            parsed_arguments.download,
+            parsed_arguments.format,
+            parsed_arguments.format_one,
+            parsed_arguments.generate_hooks,
+            parsed_arguments.upload_instagram,
+            parsed_arguments.upload_one_instagram,
+            parsed_arguments.upload_youtube,
+            parsed_arguments.upload_youtube_one,
+            parsed_arguments.youtube_status,
+            parsed_arguments.youtube_login,
+        )
+    ):
+        print("Pipeline not started: archive commands must run separately from pipeline stages.")
         return 2
     if parsed_arguments.hook is not None and not parsed_arguments.format_one:
         print("Pipeline not started: --hook requires --format-one.")
@@ -799,6 +1002,24 @@ def main(
         return run_youtube_login(config, project_root)
     if parsed_arguments.youtube_status:
         return run_youtube_status(config)
+    if parsed_arguments.archive_missing:
+        return run_archive_missing(config)
+    if parsed_arguments.verify_archive:
+        return run_verify_archive(config)
+    if parsed_arguments.list_recreatable:
+        return list_recreatable_clips(config)
+    if parsed_arguments.recreate is not None:
+        preview_exit_code = print_recreation_preview(config, parsed_arguments.recreate)
+        if preview_exit_code:
+            return preview_exit_code
+        if not parsed_arguments.yes:
+            confirmation = input(
+                f"Recreate hooked video '{parsed_arguments.recreate}' from saved local metadata? Type RECREATE: "
+            )
+            if confirmation != "RECREATE":
+                print("Recreation canceled. Type RECREATE exactly to continue.")
+                return 2
+        return run_clip_recreation(config, parsed_arguments.recreate, force=parsed_arguments.force)
     if upload_requested:
         return run_instagram_uploader(
             config,

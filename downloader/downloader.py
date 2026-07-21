@@ -45,6 +45,7 @@ class PendingClipDownloader:
         self,
         *,
         process_all: bool = False,
+        clip_ids: frozenset[str] | None = None,
         progress_callback: QueueProgressCallback | None = None,
     ) -> DownloadSummary:
         """Download eligible pending clips, respecting the configured limit unless overridden."""
@@ -59,6 +60,8 @@ class PendingClipDownloader:
         pending_clips = [clip for clip in clips if clip.download_status == "pending"]
         summary.pending = len(pending_clips)
         eligible_clips = [clip for clip in pending_clips if clip.source_url.strip()]
+        if clip_ids is not None:
+            eligible_clips = [clip for clip in eligible_clips if clip.unique_id in clip_ids]
         summary.eligible = len(eligible_clips)
         summary.processing = len(eligible_clips) if process_all else min(
             len(eligible_clips), self._config.downloads_per_run

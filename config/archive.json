@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "archive_directory": "clips/archive/hooked",
+  "copy_on_success": true,
+  "overwrite_existing": false,
+  "preserve_original_filename": true,
+  "verify_copy": true,
+  "archive_hash_enabled": true
+}

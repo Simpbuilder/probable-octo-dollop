@@ -115,6 +115,51 @@ is. Metadata records the final ready-file path and its 1080x1920 output
 dimensions while preserving source dimensions and the original local path.
 Existing files already in `clips/ready/` are retained in place.
 
+### Permanent Hooked Archive And Recreation
+
+Every successful hooked render is copied into `clips/archive/hooked/` when the
+archive is enabled in `config/archive.json`. The copy is verified by file size
+and SHA-256 hash before metadata records its archive path, timestamp, and hash.
+An archive-copy failure never invalidates a ready render; it is stored as a
+retryable archive error instead.
+
+`archive.json` keeps this behavior explicit: `copy_on_success` controls normal
+formatter copies, `overwrite_existing` remains `false` by default, and a changed
+file receives a timestamped archive version rather than replacing an earlier
+copy. `verify_copy` and `archive_hash_enabled` keep verification enabled by
+default.
+
+Archive maintenance is explicit and never downloads, formats, or uploads media:
+
+```bash
+py run_pipeline.py --archive-missing
+py run_pipeline.py --verify-archive
+```
+
+The archive is permanent local media. Safe cleanup, regeneratable-media cleanup,
+and project reset all exclude `clips/archive/`, as well as credentials, upload
+history, and posted videos.
+
+To list or rebuild a single clip, use the saved metadata and source URL only:
+
+```bash
+py run_pipeline.py --list-recreatable
+py run_pipeline.py --recreate CLIP_ID
+py run_pipeline.py --recreate CLIP_ID --force
+```
+
+The recreation command asks for `RECREATE` before it changes anything; `--yes`
+is available for the Streamlit background action or a deliberate scripted run.
+It reuses a valid pending source file, re-downloads only when required, renders
+one hooked ready file, and refreshes its archive copy. It never invokes an
+Instagram or YouTube uploader.
+
+In the Streamlit app, **Archive** provides the same archive/verify/recreate
+actions through the existing local background-job status system. **Ready
+Videos** also has a per-file delete action: after confirmation it removes only
+that selected ready output, clears its ready-output metadata, and preserves its
+source download, archive copy, hooks, metadata history, and upload history.
+
 ### Fit Layout
 
 The default `fit` crop mode never crops or stretches source content. Landscape,

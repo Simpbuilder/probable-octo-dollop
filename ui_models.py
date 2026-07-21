@@ -96,6 +96,18 @@ class YoutubeOverview:
 
 
 @dataclass(frozen=True, slots=True)
+class ArchiveOverview:
+    """Read-only permanent archive summary rendered without inspecting source services."""
+
+    enabled: bool
+    archived_videos: int
+    missing_archives: int
+    failed_archives: int
+    archive_directory: Path | None
+    total_size_bytes: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class FailedItem:
     """One stored clip error suitable for a concise UI table."""
 
@@ -112,6 +124,8 @@ class ReadyVideo:
     selected_hook: str | None
     processing_status: str
     upload_status: str
+    clip_id: str | None = None
+    archive_status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

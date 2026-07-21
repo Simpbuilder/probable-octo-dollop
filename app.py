@@ -10,12 +10,17 @@ from typing import Callable
 import streamlit as st
 
 from cleanup import print_cleanup_plan
-from collector import ConfigurationError, load_collector_config
+from collector import ConfigurationError, load_all_clip_metadata, load_collector_config
 from collector.models import CollectorConfig
-from background_jobs import request_background_job_stop, start_background_pipeline_job
+from background_jobs import (
+    request_background_job_stop,
+    start_background_pipeline_command,
+    start_background_pipeline_job,
+)
 from pipeline_runtime import load_runtime_status as load_runtime_status_file
 from ui_models import (
     DashboardCounts,
+    ArchiveOverview,
     InstagramOverview,
     PipelineProgress,
     UiConfigurationValues,
@@ -25,6 +30,8 @@ from ui_runtime import resolve_auto_refresh_interval
 from ui_helpers import (
     append_unique_urls,
     load_dashboard_counts,
+    delete_ready_video,
+    load_archive_overview,
     load_failed_items,
     load_instagram_overview,
     load_pipeline_progress,
@@ -51,6 +58,7 @@ PAGES = (
     "Add Clips",
     "Hooks",
     "Ready Videos",
+    "Archive",
     "Instagram",
     "YouTube",
     "Cleanup",
@@ -73,6 +81,7 @@ def main() -> None:
         progress = load_pipeline_progress(config, counts)
         instagram = load_instagram_overview(config)
         youtube = load_youtube_overview(config)
+        archive = load_archive_overview(config)
     except (ConfigurationError, OSError, ValueError) as error:
         st.error(f"Local pipeline status is unavailable: {error}", icon=":material/error:")
         return
@@ -88,6 +97,8 @@ def main() -> None:
         _render_hook_review(config)
     elif page == "Ready Videos":
         _render_ready_videos(config)
+    elif page == "Archive":
+        _render_archive(config, archive)
     elif page == "Instagram":
         _render_instagram(config, instagram)
     elif page == "YouTube":
@@ -538,7 +549,9 @@ def _render_ready_videos(config: CollectorConfig) -> None:
                     st.video(str(video.path))
                     st.subheader(video.path.name, anchor=False)
                     st.caption(f"Hook: {video.selected_hook or '(none)'}")
+                    st.caption(f"Clip ID: {video.clip_id or '(untracked)'}")
                     st.caption(f"Upload status: {video.upload_status}")
+                    st.caption(f"Archive: {video.archive_status or 'missing'}")
                     upload_disabled = video.upload_status != "not uploaded"
                     draft, publish = st.columns(2)
                     if draft.button(
@@ -557,8 +570,114 @@ def _render_ready_videos(config: CollectorConfig) -> None:
                         width="stretch",
                     ):
                         _run_pipeline(["--upload-one-instagram", "--publish-now"])
+                    if video.clip_id is not None:
+                        if video.archive_status != "archived":
+                            st.warning(
+                                "No confirmed archive copy exists. Recreation may require a source re-download.",
+                                icon=":material/warning:",
+                            )
+                        if video.upload_status != "not uploaded":
+                            st.info("Deleting this local file does not delete its Instagram or YouTube post.")
+                        delete_confirmed = st.checkbox(
+                            f"Delete {video.path.name} only; archive and source stay untouched",
+                            key=f"delete-confirm-{video.clip_id}",
+                        )
+                        if st.button(
+                            "Delete ready file",
+                            key=f"delete-ready-{video.clip_id}",
+                            icon=":material/delete:",
+                            disabled=not delete_confirmed,
+                            width="stretch",
+                        ):
+                            result = delete_ready_video(config, video.clip_id)
+                            if result.deleted:
+                                st.success("Ready file deleted. Archive, source, metadata, and upload history were kept.")
+                                st.rerun()
+                            else:
+                                st.error(result.error or "Ready file was not deleted.")
                     st.caption("Folder location")
                     st.code(str(video.path.parent), language="text")
+
+
+def _render_archive(config: CollectorConfig, archive: ArchiveOverview) -> None:
+    """Render local archive recovery controls through existing background job infrastructure."""
+    st.subheader("Hooked video archive", anchor=False)
+    if not archive.enabled:
+        st.warning("Archive configuration is unavailable or disabled.", icon=":material/warning:")
+        return
+    archived, missing, failed, size = st.columns(4)
+    archived.metric("Archived", archive.archived_videos, border=True)
+    missing.metric("Missing copies", archive.missing_archives, border=True)
+    failed.metric("Archive failures", archive.failed_archives, border=True)
+    size.metric("Archive size", f"{archive.total_size_bytes / (1024 * 1024):.1f} MB", border=True)
+    if archive.archive_directory is not None:
+        st.caption(f"Archive folder: {archive.archive_directory}")
+    actions = st.columns(2)
+    job_active = _load_runtime_status().is_active
+    if actions[0].button(
+        "Archive missing",
+        icon=":material/archive:",
+        disabled=job_active,
+        width="stretch",
+    ):
+        start_background_pipeline_job(PROJECT_ROOT, "archive_missing")
+        st.rerun()
+    if actions[1].button(
+        "Verify archive",
+        icon=":material/fact_check:",
+        disabled=job_active,
+        width="stretch",
+    ):
+        start_background_pipeline_job(PROJECT_ROOT, "verify_archive")
+        st.rerun()
+
+    clips = load_all_clip_metadata(config.metadata_file)
+    search = st.text_input("Search archive", placeholder="Clip ID, title, hook, or date")
+    search_key = search.casefold().strip()
+    visible_clips = [
+        clip
+        for clip in clips
+        if not search_key
+        or search_key in " ".join(
+            (
+                clip.unique_id,
+                clip.title,
+                clip.selected_hook or clip.hook_text or "",
+                clip.archive_created_at.isoformat() if clip.archive_created_at else "",
+            )
+        ).casefold()
+    ]
+    for clip in visible_clips:
+        if clip.archive_path is None or not Path(clip.archive_path).is_file():
+            continue
+        with st.container(border=True):
+            st.video(str(clip.archive_path))
+            st.caption(f"{clip.unique_id} | {clip.selected_hook or clip.hook_text or '(no hook)'}")
+            st.caption(f"Archive: {clip.archive_path}")
+            st.caption(f"Source available: {'yes' if clip.local_file_path and Path(clip.local_file_path).is_file() else 'no'}")
+    options = {
+        f"{clip.unique_id} - {clip.title}": clip.unique_id
+        for clip in visible_clips
+        if (clip.selected_hook or clip.hook_text) and clip.source_url
+    }
+    st.divider()
+    st.subheader("Recreate one hooked video", anchor=False)
+    if not options:
+        st.info("No clips with saved source URLs are available for recreation.")
+        return
+    selected_label = st.selectbox("Clip", tuple(options))
+    force = st.checkbox("Overwrite its existing ready output", value=False)
+    confirmed = st.checkbox("I confirm this recreates only the selected local video and never uploads it.")
+    if st.button(
+        "Recreate selected video",
+        icon=":material/restart_alt:",
+        disabled=job_active or not confirmed,
+    ):
+        arguments = ["--recreate", options[selected_label], "--yes"]
+        if force:
+            arguments.append("--force")
+        start_background_pipeline_command(PROJECT_ROOT, "Recreate hooked video", tuple(arguments))
+        st.rerun()
 
 
 def _render_instagram(config: CollectorConfig, instagram: InstagramOverview) -> None:

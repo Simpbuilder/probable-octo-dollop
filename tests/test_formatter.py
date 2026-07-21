@@ -10,6 +10,9 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from collector.models import ClipMetadata, FormatterConfig, HookConfig
+from collector.models import ArchiveConfig
+from archive import ArchiveManager
+from archive.models import ArchiveResult
 from collector.storage import load_all_clip_metadata, save_clip_metadata
 from formatter.ffmpeg_client import FfmpegClientError, FfmpegDependencyError
 from formatter.formatter import PendingClipFormatter
@@ -94,6 +97,13 @@ class FakeHookRenderer:
             source=selection.source,
             status="rendered",
         )
+
+
+class FailingArchiveManager:
+    """Model a recoverable archive-copy failure without involving filesystem permissions."""
+
+    def archive_formatted_clip(self, clip: ClipMetadata) -> ArchiveResult:
+        return ArchiveResult(clip.unique_id, archived=False, error="archive disk unavailable")
 
 
 def make_clip(unique_id: str, local_file_path: Path | None) -> ClipMetadata:
@@ -194,6 +204,60 @@ class PendingClipFormatterTests(unittest.TestCase):
             self.assertEqual((updated_clip.formatted_width, updated_clip.formatted_height), (1080, 1920))
             self.assertIsNone(updated_clip.format_error)
             self.assertTrue(updated_clip.formatted_file_path.is_file())
+
+    def test_successful_hooked_render_archives_without_changing_formatter_success(self) -> None:
+        """The archive copy is extra durable state and never replaces the normal ready output."""
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_file = self.create_source_file(root, "archive-success")
+            clip = make_clip("archive-success", source_file)
+            metadata_file, ready_directory, config = self.make_environment(
+                [clip], hook_config=HookConfig(enabled=True)
+            )
+            archive_directory = root / "clips" / "archive" / "hooked"
+            formatter = PendingClipFormatter(
+                metadata_file,
+                config,
+                FakeFfmpegClient(),
+                archive_manager=ArchiveManager(
+                    metadata_file,
+                    ready_directory,
+                    ArchiveConfig(archive_directory=archive_directory),
+                ),
+            )
+
+            summary = formatter.run()
+
+            updated = load_all_clip_metadata(metadata_file)[0]
+            self.assertEqual(summary.formatted, 1)
+            self.assertEqual(updated.processing_status, "ready")
+            self.assertEqual(updated.archive_status, "archived")
+            self.assertTrue(updated.archive_path.is_file())
+            self.assertEqual(updated.archive_path.read_bytes(), updated.formatted_file_path.read_bytes())
+
+    def test_archive_failure_does_not_fail_a_successful_hooked_render(self) -> None:
+        """The normal ready output remains usable when its extra permanent copy cannot be made."""
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_file = self.create_source_file(root, "archive-failure")
+            clip = make_clip("archive-failure", source_file)
+            metadata_file, _ready_directory, config = self.make_environment(
+                [clip], hook_config=HookConfig(enabled=True)
+            )
+            formatter = PendingClipFormatter(
+                metadata_file,
+                config,
+                FakeFfmpegClient(),
+                archive_manager=FailingArchiveManager(),  # type: ignore[arg-type]
+            )
+
+            summary = formatter.run()
+
+            updated = load_all_clip_metadata(metadata_file)[0]
+            self.assertEqual(summary.formatted, 1)
+            self.assertEqual(summary.failed, 0)
+            self.assertEqual(updated.processing_status, "ready")
+            self.assertTrue(updated.formatted_file_path.is_file())
 
     def test_output_filename_uses_a_windows_safe_unique_id_stem(self) -> None:
         """Formatter output never uses source filenames or invalid path characters."""
